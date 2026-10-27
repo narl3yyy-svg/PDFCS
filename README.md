@@ -28,18 +28,22 @@ OCR can never be guaranteed perfect. PDFCS therefore **checks every word against
 So a misreading is never printed as wrong text: what you see is either verified text or the
 original print.
 
-The `tools/benchmark` folder contains the measurement. It simulates hand-held phone photos (perspective, uneven light, blur, noise) of a real
-datasheet and compares the result with the original PDF's text:
+The `tools/benchmark` folder contains the measurement. It photographs pages lying on wood, light and
+white desks, dark cloth and a checked tablecloth, at an angle and with uneven light, blur and noise,
+runs them through the app on an emulator, and compares the result with the original text:
 
-- **80%** of all words come out word-exact.
-- **89%** on body-text pages.
+- **Book pages:** 99.2–100% of words come out word-exact (9 pages on 5 backgrounds).
+- **The ST USBLC6-2 datasheet:** 96% on its first page and 82% over three pages, including tables and graph labels.
 - The rest are mostly subscripts (V<sub>RM</sub>), 6-pt graph labels and symbols. These are shown as the original pixels, so they look right, but their hidden search text may differ.
+
+On 40 hold-out photo scenes the pages came out level in all 40 and upright in 39, and the background was removed from all 20 book pages.
 
 ## Features
 
 ### Scan books
 - **Book-scanning camera**: full-resolution 4:3 capture with grid, flash and torch. Shoot with the **volume keys**, or use **auto-capture** every few seconds while you turn pages.
-- **Automatic page detection**: the sheet's edges are found with a Sobel/Hough line search and the page is straightened. You can drag the corners to adjust.
+- **Automatic page detection and background removal**: each possible outline of the sheet is checked against what a page looks like, so the desk or tablecloth is cropped away, while bands printed along the page's edge are kept. You can drag the corners to adjust.
+- **Straight, aligned pages**: the page is levelled from its text lines and leaning columns are stood upright. In the rebuilt page every line sits on one baseline, flush with the margins.
 - **Lighting clean-up**: uneven light, colour casts and the shadow near the spine are evened out per colour channel, so the paper turns white and coloured ink stays coloured.
 - **Two-page spreads** split into left and right pages. Looks: Enhanced, Grayscale, Black & white, Original.
 - **Output**:
@@ -47,6 +51,7 @@ datasheet and compares the result with the original PDF's text:
   - *Original photos*: the photo with an invisible text layer, for every OCR language.
 - **OCR** with Tesseract LSTM (`tessdata_best`). English is built in, and about 30 more languages can be downloaded in Settings and combined.
 - **Long books**: conversion runs in the background with a progress notification. Your scan is saved as you go.
+- **Automatic OCR on import**: scanned PDFs and photos you import turn into searchable digital PDFs by themselves. You can turn this off in Settings.
 
 ### Read
 - Swipe between pages, pinch or double-tap to zoom, scrub through long books, jump to a page.

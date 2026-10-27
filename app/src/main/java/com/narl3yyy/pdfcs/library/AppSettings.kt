@@ -35,6 +35,8 @@ data class Settings(
     val autoCaptureSeconds: Int = 4,
     val shutterSound: Boolean = true,
     val autoCrop: Boolean = true,
+    /** Imported scans and photos become searchable PDFs by themselves (no review step). */
+    val autoOcrImport: Boolean = true,
 )
 
 class AppSettings(context: Context) {
@@ -56,6 +58,7 @@ class AppSettings(context: Context) {
             autoCaptureSeconds = prefs.getInt("autoCaptureSeconds", d.autoCaptureSeconds).coerceIn(2, 10),
             shutterSound = prefs.getBoolean("shutterSound", d.shutterSound),
             autoCrop = prefs.getBoolean("autoCrop", d.autoCrop),
+            autoOcrImport = prefs.getBoolean("autoOcrImport", d.autoOcrImport),
         )
     }
 
@@ -71,6 +74,7 @@ class AppSettings(context: Context) {
             .putInt("autoCaptureSeconds", s.autoCaptureSeconds)
             .putBoolean("shutterSound", s.shutterSound)
             .putBoolean("autoCrop", s.autoCrop)
+            .putBoolean("autoOcrImport", s.autoOcrImport)
             .apply()
         _state.value = s
     }

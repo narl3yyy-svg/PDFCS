@@ -12,7 +12,9 @@ import com.narl3yyy.pdfcs.library.FontChoice
 import com.narl3yyy.pdfcs.ocr.OcrEngine
 import com.narl3yyy.pdfcs.ocr.OcrLine
 import com.narl3yyy.pdfcs.ocr.OcrWord
+import kotlin.math.abs
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
@@ -38,7 +40,7 @@ class PageRebuilder(context: Context, private val ocr: OcrEngine, private val fo
     private val bodyWeights = ArrayList<Float>()
 
     fun rebuild(colour: Bitmap, gray: Bitmap): RebuiltPage {
-        val lines = ocr.readPage(gray)
+        val lines = dropMarginJunk(ocr.readPage(gray), gray.width, gray.height)
         val ink = InkMap(gray)
         val fitter = WordFitter(ink, colour)
 
@@ -65,13 +67,17 @@ class PageRebuilder(context: Context, private val ocr: OcrEngine, private val fo
         val perLine = fitted.map { decideLine(it, pageWeight, family, fitter) }
         rejectOddWidths(perLine)
         val budget = intArrayOf(MAX_REREADS)
-        val decided = perLine.flatten().map { d ->
-            if (d.visible || budget[0] <= 0) d
-            else secondLook(d, gray, fitter, budget)?.also { verified++ } ?: d
+        val decidedLines = perLine.map { line ->
+            alignBaselines(line.map { d ->
+                if (d.visible || budget[0] <= 0) d
+                else secondLook(d, gray, fitter, budget)?.also { verified++ } ?: d
+            })
         }
+        val decided = decidedLines.flatten()
+        val bodySize = Stats.weightedMedian(lineSizes) ?: 40f
+        alignRows(decidedLines, bodySize)
 
         // White text on dark bands: read inverted, kept as pixels with searchable text on top.
-        val bodySize = Stats.weightedMedian(lineSizes) ?: 40f
         val words = ArrayList<PageWord>()
         for (d in decided) {
             val colourOfInk = if (d.visible) fitter.inkColour(d.p.box) else Color.BLACK
@@ -79,17 +85,20 @@ class PageRebuilder(context: Context, private val ocr: OcrEngine, private val fo
             if (d.visible) ink.erase(expand(d.p.box, max(2, (d.p.box.height() * 0.12f).roundToInt())))
         }
         val panels = GraphicsFinder.darkPanels(ink, bodySize)
-        val regions = GraphicsFinder.find(ink, bodySize, lines.flatMap { l -> l.words.map { it.box } })
+        val invertedBoxes = ArrayList<Rect>()
         for (r in panels) {
             for (line in ocr.readInverted(gray, r)) {
                 val size = fitter.lineSize(line, regular) ?: continue
                 line.words.forEachIndexed { i, w ->
+                    invertedBoxes += w.box
                     fitter.place(w, wordText(line, i), regular, size, line)?.let {
                         words += PageWord(it.text, it.face, it.size, it.scale, it.x, it.baseline, false, Color.BLACK)
                     }
                 }
             }
         }
+        // Graphics are what is left of the ink; ink at the edge holding no words is background.
+        val regions = GraphicsFinder.find(ink, bodySize, lines.flatMap { l -> l.words.map { it.box } } + invertedBoxes)
         val visibleBoxes = decided.filter { it.visible }.map { it.p.box }
         val graphics = regions.mapNotNull { r -> cut(colour, r, visibleBoxes) }
 
@@ -133,7 +142,7 @@ class PageRebuilder(context: Context, private val ocr: OcrEngine, private val fo
         return scale
     }
 
-    private class Decision(val p: Placement, var visible: Boolean)
+    private class Decision(var p: Placement, var visible: Boolean)
 
     private class LineFit(val line: OcrLine, val size: Float, val words: List<Pair<Placement, Match>?>, val slant: Float) {
         val inkAmount: Int = words.sumOf { it?.second?.photo ?: 0 }
@@ -195,6 +204,136 @@ class PageRebuilder(context: Context, private val ocr: OcrEngine, private val fo
         val minFit = if (p.ink.length <= 2) MIN_FIT_SHORT else MIN_FIT
         return word.confidence >= MIN_CONFIDENCE && fit >= minFit && p.scale in 0.6f..1.7f &&
             word.box.height() >= 5 && fitter.onPaper(word.box)
+    }
+
+    /**
+     * One baseline per line: the words of a line are set on the line's median baseline, as type is.
+     * A word far off it (a superscript, a word of another column the OCR joined) keeps its own.
+     */
+    private fun alignBaselines(line: List<Decision>): List<Decision> {
+        val visible = line.filter { it.visible }
+        if (visible.size < 2) return line
+        val base = Stats.median(visible.map { it.p.baseline }) ?: return line
+        for (d in line) {
+            val p = d.p
+            if (abs(p.baseline - base) < p.size * 0.18f && p.baseline != base) {
+                d.p = Placement(p.text, p.word, p.line, p.lineSize, p.face, p.size, p.scale, p.x, base)
+            }
+        }
+        return line
+    }
+
+    /**
+     * Pattern left of the scene along a side (the stripes of a cloth) reads as "|", "l" or "!".
+     * Such one- or two-character readings, out in the outer margin beyond all the real text, are
+     * no words: they are dropped, so they are neither drawn nor searchable.
+     */
+    private fun dropMarginJunk(lines: List<OcrLine>, w: Int, h: Int): List<OcrLine> {
+        val junk = Regex("""^[|!lI1i'`".,:;_~\-]{1,2}$""")
+        val real = lines.flatMap { it.words }.filter { it.text.count(Char::isLetterOrDigit) >= 2 }
+        if (real.isEmpty()) return lines
+        val content = Rect(real.first().box).apply { real.forEach { union(it.box) } }
+        val mx = w * 0.06f
+        val my = h * 0.06f
+        fun inMargin(r: Rect) = (r.right <= content.left && r.left < mx) || (r.left >= content.right && r.right > w - mx) ||
+            (r.bottom <= content.top && r.top < my) || (r.top >= content.bottom && r.bottom > h - my)
+        return lines.mapNotNull { line ->
+            val kept = line.words.filterNot { junk.matches(it.text) && inMargin(it.box) }
+            when {
+                kept.isEmpty() -> null
+                kept.size == line.words.size -> line
+                else -> line.copy(words = kept)
+            }
+        }
+    }
+
+    /**
+     * One baseline and one size per printed line, and flush margins. The OCR sometimes cuts a
+     * printed line into pieces (a page a little curved, a wide gap), and each piece gets its own
+     * baseline and size, so the rebuilt line would step up and down; a photo taken a little at an
+     * angle leaves the line starts drifting. So:
+     *
+     * - pieces at the same height that sit side by side (not across a column gap) become one line,
+     *   set on its median baseline at its median size; a size within 6% of the body text is the
+     *   body size, as in a typeset page. Superscripts and much larger or smaller words keep theirs;
+     * - line starts and ends close to a margin shared by several lines are moved onto it, a line
+     *   reaching both margins (justified text) is stretched between them.
+     */
+    private fun alignRows(lines: List<List<Decision>>, bodySize: Float) {
+        class Row(val words: MutableList<Decision>) {
+            var left = 0; var right = 0; var base = 0f; var size = 0f
+            fun measure() = apply {
+                left = words.minOf { it.p.box.left }
+                right = words.maxOf { it.p.box.right }
+                base = Stats.median(words.map { it.p.baseline })!!
+                size = Stats.median(words.map { it.p.size })!!
+            }
+        }
+        val rows = lines.map { l -> l.filter { it.visible } }.filter { it.isNotEmpty() }.map { Row(it.toMutableList()).measure() }.toMutableList()
+        var merged = true
+        while (merged) {
+            merged = false
+            loop@ for (i in rows.indices) for (j in i + 1 until rows.size) {
+                val a = rows[i]
+                val b = rows[j]
+                val size = min(a.size, b.size)
+                val gap = max(a.left, b.left) - min(a.right, b.right)
+                if (abs(a.base - b.base) < 0.4f * size && gap > 0 && gap < 3f * size) {
+                    a.words += b.words
+                    a.measure()
+                    rows.removeAt(j)
+                    merged = true
+                    break@loop
+                }
+            }
+        }
+        for (row in rows) {
+            row.measure()
+            if (row.words.size < 2) continue
+            val median = row.size
+            val peers = row.words.filter { it.p.size / median in 0.8f..1.25f }
+            if (peers.size < 2) continue
+            var size = Stats.weightedMedian(peers.map { it.p.size to it.p.box.width() }) ?: continue
+            if (abs(size / bodySize - 1f) < 0.06f) size = bodySize
+            val base = Stats.weightedMedian(peers.map { it.p.baseline to it.p.box.width() }) ?: continue
+            for (d in peers) {
+                val p = d.p
+                if (abs(p.baseline - base) >= 0.3f * size) continue
+                val newSize = if (abs(p.size / size - 1f) < 0.15f) size else p.size
+                // The same width at the new size: the stretch makes up for it.
+                d.p = Placement(p.text, p.word, p.line, p.lineSize, p.face, newSize, p.scale * p.size / newSize, p.x, base)
+            }
+        }
+        // Margins: edges shared by at least three lines, each the median of its group.
+        fun margins(edges: List<Int>): List<Float> {
+            val sorted = edges.sorted()
+            val out = ArrayList<Float>()
+            var start = 0
+            for (i in 1..sorted.size) {
+                if (i == sorted.size || sorted[i] - sorted[i - 1] > 0.3f * bodySize) {
+                    val group = sorted.subList(start, i)
+                    if (group.size >= 3) out += group[group.size / 2].toFloat()
+                    start = i
+                }
+            }
+            return out
+        }
+        val lefts = margins(rows.map { it.left })
+        val rights = margins(rows.map { it.right })
+        for (row in rows) {
+            val l = row.left.toFloat()
+            val r = row.right.toFloat()
+            val tol = 0.6f * row.size
+            val newL = lefts.minByOrNull { abs(it - l) }?.takeIf { abs(it - l) < tol } ?: l
+            val newR = rights.minByOrNull { abs(it - r) }?.takeIf { abs(it - r) < tol } ?: (r + newL - l)
+            if (newL == l && newR == r) continue
+            val f = if (r > l) (newR - newL) / (r - l) else 1f
+            if (f !in 0.97f..1.03f) continue
+            for (d in row.words) {
+                val p = d.p
+                d.p = Placement(p.text, p.word, p.line, p.lineSize, p.face, p.size, p.scale * f, newL + (p.x - l) * f, p.baseline)
+            }
+        }
     }
 
     /** Searchable but not drawn, for characters the bundled fonts don't have. */

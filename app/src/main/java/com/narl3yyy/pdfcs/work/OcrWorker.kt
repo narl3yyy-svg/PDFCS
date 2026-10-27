@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.os.Build
+import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingWorkPolicy
 import androidx.work.ForegroundInfo
@@ -68,20 +69,24 @@ class OcrWorker(context: Context, params: WorkerParameters) : CoroutineWorker(co
             val ocr = OcrEngine(applicationContext, languages).also { engine = it }
             val produced = if (digital) digital(ocr, fontChoice, jobDir, pages, work) else photos(ocr, quality, jobDir, pages, work)
             check(produced.length() > 0) { "The PDF could not be written" }
-            val target = AppGraph.documents.uniqueFile(title)
+            // A converted import takes the place of the scanned original, under the same name.
+            val replaces = inputData.getString(KEY_REPLACES)?.let(::File)?.takeIf { it.exists() }
+            val target = replaces?.also { it.delete() } ?: AppGraph.documents.uniqueFile(title)
             if (!produced.renameTo(target)) produced.copyTo(target, overwrite = false)
             jobDir.deleteRecursively()
             AppGraph.documents.refresh()
             Notifications.finished(applicationContext, notificationId, title, true, "${pages.size} pages, searchable")
+            Log.i(LOG_TAG, "finished: ${pages.size} pages -> ${target.name}")
             Result.success(workDataOf(KEY_OUTPUT to target.path, OUT_TITLE to title))
         } catch (e: CancellationException) {
             engine?.stop()
-            AppGraph.session.restoreFrom(jobDir)
+            keepPages(jobDir)
             throw e
         } catch (t: Throwable) {
-            val restored = AppGraph.session.restoreFrom(jobDir)
+            val restored = keepPages(jobDir)
             val msg = (t.message ?: t.javaClass.simpleName) + if (restored) " — your pages were kept." else ""
             Notifications.finished(applicationContext, notificationId, title, false, msg)
+            Log.w(LOG_TAG, "failed: $msg", t)
             Result.failure(workDataOf(KEY_ERROR to msg, OUT_TITLE to title))
         } finally {
             runCatching { engine?.close() }
@@ -152,8 +157,13 @@ class OcrWorker(context: Context, params: WorkerParameters) : CoroutineWorker(co
         runCatching { setForeground(foreground(done, total)) }
     }
 
+    /** A scan goes back to the scan screen; an import's original PDF is still in the library. */
+    private fun keepPages(jobDir: File): Boolean =
+        if (inputData.getString(KEY_REPLACES) != null) { jobDir.deleteRecursively(); false } else AppGraph.session.restoreFrom(jobDir)
+
     companion object {
         const val TAG = "ocr"
+        private const val LOG_TAG = "OcrWorker"
         const val KEY_JOB_DIR = "jobDir"
         const val KEY_TITLE = "title"
         const val KEY_LANGS = "langs"
@@ -161,6 +171,7 @@ class OcrWorker(context: Context, params: WorkerParameters) : CoroutineWorker(co
         const val KEY_STYLE = "style"
         const val KEY_FONT = "font"
         const val KEY_OUTPUT = "output"
+        const val KEY_REPLACES = "replaces"
         const val KEY_ERROR = "error"
 
         /**
@@ -188,8 +199,26 @@ class OcrWorker(context: Context, params: WorkerParameters) : CoroutineWorker(co
         ): Boolean {
             val session = AppGraph.session
             if (session.pages.value.isEmpty()) return false
-            val jobDir = File(context.filesDir, "jobs/${UUID.randomUUID()}")
+            val jobDir = newJobDir(context)
             if (!session.detachInto(jobDir)) return false
+            enqueueDir(context, jobDir, title, languages, quality, style, font)
+            return true
+        }
+
+        /** A fresh folder for a job's pages. */
+        fun newJobDir(context: Context) = File(context.filesDir, "jobs/${UUID.randomUUID()}")
+
+        /** Queues the pages in [jobDir] (photos + pages.json) for conversion into the library. */
+        fun enqueueDir(
+            context: Context,
+            jobDir: File,
+            title: String,
+            languages: List<String>,
+            quality: PdfQuality,
+            style: OutputStyle,
+            font: FontChoice,
+            replaces: File? = null,
+        ) {
             val request = OneTimeWorkRequestBuilder<OcrWorker>()
                 .addTag(TAG)
                 .setInputData(
@@ -200,12 +229,12 @@ class OcrWorker(context: Context, params: WorkerParameters) : CoroutineWorker(co
                         KEY_QUALITY to quality.name,
                         KEY_STYLE to style.name,
                         KEY_FONT to font.name,
+                        KEY_REPLACES to replaces?.path,
                     ),
                 )
                 .build()
             // Jobs run one at a time: OCR already uses the CPU fully, and memory is the limit.
             WorkManager.getInstance(context).enqueueUniqueWork("ocr-queue", ExistingWorkPolicy.APPEND_OR_REPLACE, request)
-            return true
         }
     }
 }

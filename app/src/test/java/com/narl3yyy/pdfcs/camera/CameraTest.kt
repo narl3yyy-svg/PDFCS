@@ -117,3 +117,79 @@ class CameraCleanTest {
         assertTrue(px.contentEquals(copy))
     }
 }
+
+class DeskewTest {
+    /** A page of text bars (lines of "words") turned by [degrees] about its centre. */
+    private fun page(w: Int, h: Int, degrees: Double): IntArray {
+        val flat = IntArray(w * h) { -1 }
+        for (y in 0 until h) for (x in 0 until w) {
+            val line = (y - 60) % 40 in 0..11 && y in 60 until h - 60
+            val word = (x / 23) % 7 != 0 && x in 60 until w - 60
+            if (line && word) flat[y * w + x] = 0xFF202020.toInt()
+        }
+        return Deskew.rotate(flat, w, h, degrees)
+    }
+
+    @Test fun measuresAndUndoesATilt() {
+        for (deg in listOf(-5.0, -1.2, 0.0, 2.5, 6.0)) {
+            val px = page(900, 1200, deg)
+            val found = Deskew.angle(px, 900, 1200)
+            assertTrue("tilt $deg° measured as $found°", kotlin.math.abs(found - deg) < 0.2)
+            val level = Deskew.rotate(px, 900, 1200, -found)
+            assertTrue("straightened page is level", kotlin.math.abs(Deskew.angle(level, 900, 1200)) < 0.2)
+        }
+    }
+
+    /** Justified lines of words of random lengths, the columns leaning by [lean] (x per y). */
+    private fun leaningPage(w: Int, h: Int, lean: Double): IntArray {
+        val px = IntArray(w * h) { -1 }
+        val rnd = java.util.Random(7)
+        for (top in 60 until h - 72 step 40) {
+            // Word and gap lengths for this line, then the ink painted with the lean applied.
+            val ink = BooleanArray(w)
+            var x = 60
+            while (x < w - 60) {
+                val len = 12 + rnd.nextInt(50)
+                for (i in x until minOf(x + len, w - 60)) ink[i] = true
+                x += len + 8 + rnd.nextInt(6)
+            }
+            for (y in top until top + 12) {
+                val shift = (lean * (y - h / 2)).toInt()
+                for (i in 0 until w) if (ink[i] && i + shift in 0 until w) px[y * w + i + shift] = 0xFF202020.toInt()
+            }
+        }
+        return px
+    }
+
+    @Test fun measuresALeaningColumn() {
+        for (lean in listOf(-0.04, 0.0, 0.025, 0.06)) {
+            val found = Deskew.shear(leaningPage(900, 1200, lean), 900, 1200)
+            assertTrue("lean $lean measured as $found", kotlin.math.abs(found - lean) < 0.003)
+        }
+    }
+
+    @Test fun leavesPicturesAndBlankPagesAlone() {
+        assertTrue(Deskew.angle(IntArray(400 * 400) { -1 }, 400, 400) == 0.0)
+    }
+
+    @Test fun trimsABackgroundStripButNotThePage() {
+        val w = 600; val h = 800
+        val px = page(w, h, 0.0)
+        // A 40 px strip of red tablecloth down the left side.
+        for (y in 0 until h) for (x in 0 until 40) px[y * w + x] = if ((x / 10 + y / 10) % 2 == 0) 0xFFAA3030.toInt() else 0xFFF0E6E6.toInt()
+        val cloth = List(40) { if (it % 2 == 0) 0xFFAA3030.toInt() else 0xFFF0E6E6.toInt() }
+        val cut = Deskew.trim(px, w, h, cloth)
+        assertTrue("left cut ${cut[0]} covers the strip", cut[0] in 38..46)
+        assertTrue("other sides untouched: ${cut.toList()}", cut[1] == 0 && cut[2] == 0 && cut[3] == 0)
+    }
+
+    @Test fun keepsABandPrintedAlongThePageEdge() {
+        val w = 600; val h = 800
+        val px = page(w, h, 0.0)
+        // A datasheet's blue footer running to the paper's edge, on a page photographed on wood.
+        for (y in h - 30 until h) for (x in 0 until w) px[y * w + x] = 0xFF3AA8DC.toInt()
+        val wood = List(40) { if (it % 2 == 0) 0xFF8B5A2B.toInt() else 0xFFA0703A.toInt() }
+        assertTrue("band kept", Deskew.trim(px, w, h, wood)[3] == 0)
+        assertTrue("nothing known about the scene: nothing cut", Deskew.trim(px, w, h, emptyList()).all { it == 0 })
+    }
+}

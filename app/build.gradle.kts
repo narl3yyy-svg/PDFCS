@@ -21,8 +21,8 @@ android {
         applicationId = "com.narl3yyy.pdfcs"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.1.0"
+        versionCode = 3
+        versionName = "1.2.0"
 
         ndk {
             // Real phones only; keeps the APK small.
@@ -75,6 +75,11 @@ android {
     testOptions {
         unitTests.isIncludeAndroidResources = true
         unitTests.isReturnDefaultValues = false
+        unitTests.all { test ->
+            // Opt-in benchmarks read their data from outside the repository.
+            System.getProperty("pdfcs.scenes")?.let { test.systemProperty("pdfcs.scenes", it) }
+            test.maxHeapSize = "2g"
+        }
     }
     dependenciesInfo {
         // No Google-encrypted dependency blob in the APK (keeps F-Droid style builds clean).

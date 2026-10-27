@@ -100,6 +100,15 @@ fun SettingsScreen(onBack: () -> Unit, onAbout: () -> Unit) {
             }
             item {
                 ListItem(
+                    headlineContent = { Text("OCR imports automatically") },
+                    supportingContent = { Text("Scanned PDFs and photos you import become clean, searchable PDFs by themselves") },
+                    trailingContent = {
+                        Switch(settings.autoOcrImport, { v -> AppGraph.settings.update { it.copy(autoOcrImport = v) } })
+                    },
+                )
+            }
+            item {
+                ListItem(
                     headlineContent = { Text("Volume keys take a photo") },
                     supportingContent = { Text("Hold the book open with one hand and shoot with the other") },
                     trailingContent = {

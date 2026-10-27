@@ -5,6 +5,7 @@ Compares the bag of words on matching pages, case-sensitively, and lists what is
 and what is extra (misread).
 
     word_accuracy.py original.pdf rebuilt.pdf ORIG_PAGE:OUT_PAGE [...]
+    word_accuracy.py page.txt rebuilt.pdf 1:OUT_PAGE     (ground truth from book_page.py)
 """
 import collections
 import re
@@ -13,6 +14,8 @@ import sys
 
 
 def words(pdf, page):
+    if pdf.endswith(".txt"):  # ground truth written by book_page.py
+        return re.findall(r"[A-Za-z0-9][A-Za-z0-9.\-/+°µ²=]*", open(pdf).read())
     text = subprocess.run(["pdftotext", "-f", str(page), "-l", str(page), pdf, "-"],
                           capture_output=True, text=True, check=True).stdout
     return re.findall(r"[A-Za-z0-9][A-Za-z0-9.\-/+°µ²=]*", text)

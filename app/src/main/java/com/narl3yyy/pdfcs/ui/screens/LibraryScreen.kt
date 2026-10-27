@@ -114,6 +114,7 @@ import com.narl3yyy.pdfcs.ui.components.EmptyState
 import com.narl3yyy.pdfcs.ui.components.PageThumbnail
 import com.narl3yyy.pdfcs.ui.formatBytes
 import com.narl3yyy.pdfcs.ui.formatDate
+import com.narl3yyy.pdfcs.work.ImportJobs
 import com.narl3yyy.pdfcs.work.OcrWorker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -191,13 +192,33 @@ fun LibraryScreen(
         }
     }
 
+    /**
+     * Copies a PDF into the library. A scanned one (pictures of pages, no text) is then converted
+     * into a searchable PDF in the background, replacing the copy, unless that is turned off.
+     * Returns the file when it can be opened now, null when it is being converted.
+     */
+    suspend fun importPdf(uri: Uri): File? {
+        val file = repo.import(uri)
+        if (!AppGraph.settings.value.autoOcrImport || !ImportJobs.isScanned(file)) return file
+        busy = "Preparing “${file.nameWithoutExtension}”…"
+        val pages = ImportJobs.fromPdf(context, file, file.nameWithoutExtension, replace = true) { d, t ->
+            busy = "Preparing page $d of $t…"
+        }
+        busy = null
+        toast("Making “${file.nameWithoutExtension}” searchable ($pages pages)…")
+        return null
+    }
+
     // A PDF shared from another app: copy it in and open it.
     LaunchedEffect(incomingPdf) {
         val uri = incomingPdf ?: return@LaunchedEffect
         onIncomingHandled()
-        runCatching { repo.import(uri) }
-            .onSuccess(onOpen)
-            .onFailure { toast(it.message ?: "Could not open that PDF") }
+        // Not in this effect: clearing the request restarts it, which would cancel the import.
+        scope.launch {
+            runCatching { importPdf(uri) }
+                .onSuccess { it?.let(onOpen) }
+                .onFailure { busy = null; toast(it.message ?: "Could not open that PDF") }
+        }
     }
 
     val importPdf = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
@@ -205,7 +226,7 @@ fun LibraryScreen(
         scope.launch {
             busy = "Importing…"
             var last: File? = null
-            uris.forEach { u -> runCatching { repo.import(u) }.onSuccess { last = it }.onFailure { toast(it.message ?: "Import failed") } }
+            uris.forEach { u -> runCatching { importPdf(u) }.onSuccess { last = it }.onFailure { toast(it.message ?: "Import failed") } }
             busy = null
             if (uris.size == 1) last?.let(onOpen)
         }
@@ -219,20 +240,35 @@ fun LibraryScreen(
                 withContext(Dispatchers.IO) {
                     context.contentResolver.openInputStream(uri)!!.use { i -> tmp.outputStream().use { i.copyTo(it) } }
                 }
-                PdfPages.importIntoSession(tmp, AppGraph.session) { d, t -> busy = "Preparing page $d of $t…" }
+                if (AppGraph.settings.value.autoOcrImport) {
+                    val title = (repo.nameOf(uri) ?: "Imported") + " (searchable)"
+                    ImportJobs.fromPdf(context, tmp, title) { d, t -> busy = "Preparing page $d of $t…" }
+                } else {
+                    PdfPages.importIntoSession(tmp, AppGraph.session) { d, t -> busy = "Preparing page $d of $t…" }
+                }
                 tmp.delete()
             }
             busy = null
-            result.onSuccess { onReview() }.onFailure { toast(it.message ?: "Could not read that PDF") }
+            result.onSuccess { if (!AppGraph.settings.value.autoOcrImport) onReview() else toast("Making the PDF searchable…") }
+                .onFailure { toast(it.message ?: "Could not read that PDF") }
         }
     }
     val pickImages = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { uris ->
         if (uris.isEmpty()) return@rememberLauncherForActivityResult
         scope.launch {
             busy = "Adding images…"
-            importImages(context, uris) { d, t -> busy = "Adding image $d of $t…" }
-            busy = null
-            onReview()
+            if (AppGraph.settings.value.autoOcrImport) {
+                // Each photo's page is found and cropped, then the set is converted in the background.
+                val title = "Images " + java.text.SimpleDateFormat("yyyy-MM-dd HH.mm", java.util.Locale.US).format(java.util.Date())
+                runCatching { ImportJobs.fromImages(context, uris, title) { d, t -> busy = "Finding page $d of $t…" } }
+                    .onSuccess { toast("Making $it pages searchable…") }
+                    .onFailure { toast(it.message ?: "Could not read those images") }
+                busy = null
+            } else {
+                importImages(context, uris) { d, t -> busy = "Adding image $d of $t…" }
+                busy = null
+                onReview()
+            }
         }
     }
     val saveToDevice = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
@@ -406,9 +442,12 @@ fun LibraryScreen(
                     onOcr = {
                         scope.launch {
                             busy = "Preparing pages…"
+                            val auto = AppGraph.settings.value.autoOcrImport
                             runCatching {
-                                PdfPages.importIntoSession(doc.file, AppGraph.session) { d, t -> busy = "Preparing page $d of $t…" }
-                            }.onSuccess { onReview() }.onFailure { toast(it.message ?: "Could not read that PDF") }
+                                if (auto) ImportJobs.makeSearchable(context, doc.file) { d, t -> busy = "Preparing page $d of $t…" }
+                                else PdfPages.importIntoSession(doc.file, AppGraph.session) { d, t -> busy = "Preparing page $d of $t…" }
+                            }.onSuccess { if (auto) toast("Making “${doc.title}” searchable…") else onReview() }
+                                .onFailure { toast(it.message ?: "Could not read that PDF") }
                             busy = null
                         }
                     },

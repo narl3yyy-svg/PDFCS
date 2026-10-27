@@ -32,6 +32,7 @@ import com.narl3yyy.pdfcs.ui.inspect.InfoScreen
 import com.narl3yyy.pdfcs.ui.organize.OrganizeScreen
 import com.narl3yyy.pdfcs.ui.reader.ReaderScreen
 import com.narl3yyy.pdfcs.reader.PdfPages
+import com.narl3yyy.pdfcs.work.ImportJobs
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.rememberCoroutineScope
 import android.widget.Toast
@@ -121,8 +122,18 @@ class MainActivity : ComponentActivity() {
                             onFillForm = { nav.navigate("form?path=${Uri.encode(it.path)}") },
                             onMakeSearchable = { f ->
                                 scope.launch {
-                                    runCatching { PdfPages.importIntoSession(f, AppGraph.session) { _, _ -> } }
-                                        .onSuccess { nav.navigate("review") }
+                                    val auto = AppGraph.settings.value.autoOcrImport
+                                    runCatching {
+                                        if (auto) ImportJobs.makeSearchable(this@MainActivity, f)
+                                        else PdfPages.importIntoSession(f, AppGraph.session) { _, _ -> }
+                                    }
+                                        .onSuccess {
+                                            if (!auto) nav.navigate("review")
+                                            else {
+                                                Toast.makeText(this@MainActivity, "Making “${f.nameWithoutExtension}” searchable in the background…", Toast.LENGTH_LONG).show()
+                                                nav.popBackStack("library", false)
+                                            }
+                                        }
                                         .onFailure { Toast.makeText(this@MainActivity, it.message ?: "Could not read that PDF", Toast.LENGTH_LONG).show() }
                                 }
                             },

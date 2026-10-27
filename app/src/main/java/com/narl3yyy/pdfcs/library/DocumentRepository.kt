@@ -128,6 +128,9 @@ class DocumentRepository(private val context: Context) {
         }.getOrNull()
     }
 
+    /** The picked file's name without ".pdf". */
+    fun nameOf(uri: Uri): String? = displayName(uri)?.removeSuffix(".pdf")?.removeSuffix(".PDF")
+
     private fun displayName(uri: Uri): String? = runCatching {
         context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
             if (c.moveToFirst()) c.getString(0) else null

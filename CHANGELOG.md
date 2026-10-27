@@ -2,6 +2,25 @@
 
 All notable changes to PDFCS. Versions follow [semantic versioning](https://semver.org/).
 
+## [1.2.0] — 2026-10-26
+
+### Added
+- **Automatic OCR on import** (on by default, Settings → *OCR imports automatically*). Scanned PDFs and photos you import are made searchable in the background with your default settings, with no review step. A scanned PDF is replaced by its searchable version under the same name. PDFs that already have text are imported as they are.
+- "Make searchable" in the library and the reader converts directly in the background.
+- A scene benchmark (`SceneBenchmark`, `tools/benchmark/scene.py`, `make_set.sh`): book and datasheet pages photographed on wood, light and white desks, dark cloth and a checked tablecloth, with a hold-out set, measuring page finding, tilt, lean and leftover background.
+
+### Changed
+- **Background removal.** The page finder now checks every candidate outline against what a photographed page looks like: one paper colour inside, a real edge on every side, and a different scene outside. A box lined up with a tablecloth's pattern no longer wins over the page, and a coloured band printed along the page's edge is kept. Leftover strips of desk or cloth along the edges are trimmed using the colours actually seen around the page.
+- **Straight pages.** Pages are levelled to 0.05° from their text lines, and text columns that lean (line starts drifting sideways) are sheared upright.
+- **Aligned text.** In the digital rebuild, each printed line has one baseline and one size, even where the OCR cut it into pieces. Body text has one size throughout, and lines sit flush on the column margins.
+- Leftover background in the margins (cloth stripes read as "|" characters, slivers of pattern) is no longer drawn or made searchable.
+- Corners uncovered by straightening are filled with the paper's colour, so the lighting clean-up no longer shades them.
+
+### Fixed
+- Opening a PDF from another app (Files, Share) could cancel its own import.
+- Datasheet footer bands at the page's edge were sometimes cut off by the automatic crop.
+- Pages imported from a PDF could be cropped to a printed band.
+
 ## [1.1.0] — 2026-10-26
 
 ### Added

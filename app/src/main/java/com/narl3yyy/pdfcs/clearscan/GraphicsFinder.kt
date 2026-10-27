@@ -33,6 +33,8 @@ object GraphicsFinder {
         val stack = IntArray(count.size)
         val out = ArrayList<Rect>()
         val minInk = max(16f, bodySize * bodySize * 0.02f)
+        // Where the words are: the page's content.
+        val content = wordBoxes.fold(null as Rect?) { acc, b -> acc?.apply { union(b) } ?: Rect(b) }
         for (start in grown.indices) {
             if (!grown[start] || seen[start]) continue
             var sp = 0
@@ -53,10 +55,18 @@ object GraphicsFinder {
             if (total < minInk) continue // dust, specks, leftovers of erased words
             val r = Rect(x0 * cell, y0 * cell, min(ink.w, (x1 + 1) * cell), min(ink.h, (y1 + 1) * cell))
             val touchesEdge = r.left <= 0 || r.top <= 0 || r.right >= ink.w || r.bottom >= ink.h
-            val thin = r.width() < ink.w * 0.02f || r.height() < ink.h * 0.02f
-            // A thin strip along the border with no words in it is the page edge or the shadow of
-            // the next page; a footer band or a rule with text is content.
-            if (touchesEdge && thin && wordBoxes.none { Rect.intersects(it, r) }) continue
+            // Ink at the page's edge that holds no words is background the crop left behind (the
+            // desk, a tablecloth, the next page's shadow); a footer band with text is content.
+            if (touchesEdge && wordBoxes.none { Rect.intersects(it, r) }) continue
+            // So is a thin wordless sliver in the outer margin, beyond all the text (the last of
+            // a tablecloth's pattern along a side).
+            if (content != null && min(r.width(), r.height()) < 1.2f * bodySize && wordBoxes.none { Rect.intersects(it, r) }) {
+                val mx = ink.w * 0.06f
+                val my = ink.h * 0.06f
+                val inMargin = (r.right <= content.left && r.left < mx) || (r.left >= content.right && r.right > ink.w - mx) ||
+                    (r.bottom <= content.top && r.top < my) || (r.top >= content.bottom && r.bottom > ink.h - my)
+                if (inMargin) continue
+            }
             out += r
         }
         return out
