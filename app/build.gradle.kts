@@ -68,8 +68,34 @@ android {
         // The OCR model is already compressed; storing it avoids a slow inflate.
         noCompress += "traineddata"
     }
+    // One APK per processor as well as the universal one: a phone needs only its own native
+    // libraries, and the arm64 APK is small enough to send around.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86_64")
+            isUniversalApk = true
+        }
+    }
+
+    // One APK per processor as well as the universal one: a phone needs only its own native
+    // libraries, and the arm64 APK is small enough to send around.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86_64")
+            isUniversalApk = true
+        }
+    }
+
     packaging {
-        resources.excludes += setOf("META-INF/{AL2.0,LGPL2.1}", "META-INF/DEPENDENCIES")
+        resources.excludes += setOf(
+            "META-INF/{AL2.0,LGPL2.1}", "META-INF/DEPENDENCIES",
+            // Data tables of BouncyCastle's post-quantum ciphers, which PDF encryption never uses.
+            "org/bouncycastle/pqc/crypto/picnic/*.properties", "org/bouncycastle/pqc/crypto/sike/*.properties",
+        )
         jniLibs.useLegacyPackaging = false
     }
     testOptions {
