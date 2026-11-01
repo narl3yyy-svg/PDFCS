@@ -103,7 +103,7 @@ class OcrWorker(context: Context, params: WorkerParameters) : CoroutineWorker(co
                 currentCoroutineContext().ensureActive()
                 // The rebuilt page needs clean white paper behind its figures.
                 val clean = if (page.look == Look.ORIGINAL) page.copy(look = Look.COLOUR) else page
-                val full = PageImage.upscaleTo(PageImage.render(File(jobDir, page.source), clean, DIGITAL_MAX_SIDE), OCR_MAX_SIDE)
+                val full = upright(PageImage.upscaleTo(PageImage.render(File(jobDir, page.source), clean, DIGITAL_MAX_SIDE), OCR_MAX_SIDE), ocr)
                 val gray = PageImage.forOcr(full)
                 try {
                     val rebuilt = rebuilder.rebuild(full, gray)
@@ -127,7 +127,7 @@ class OcrWorker(context: Context, params: WorkerParameters) : CoroutineWorker(co
             pages.forEachIndexed { index, page ->
                 currentCoroutineContext().ensureActive()
                 val jpeg = File(work, "page.jpg")
-                val full = PageImage.render(File(jobDir, page.source), page, OCR_MAX_SIDE)
+                val full = upright(PageImage.render(File(jobDir, page.source), page, OCR_MAX_SIDE), ocr)
                 try {
                     val longSide = maxOf(full.width, full.height)
                     val display = if (longSide > quality.maxSide) {
@@ -150,6 +150,29 @@ class OcrWorker(context: Context, params: WorkerParameters) : CoroutineWorker(co
             writer.end()
         }
         return File(base.path + ".pdf")
+    }
+
+    /**
+     * The page the right way up. A page photographed upside down, or turned the wrong way by the
+     * sideways check, reads as nothing but garbage: a band across the middle is read both ways up
+     * and the page is turned when upside down reads clearly better.
+     */
+    private fun upright(page: Bitmap, ocr: OcrEngine): Bitmap {
+        val band = Bitmap.createBitmap(page, page.width / 12, page.height * 3 / 10, page.width * 10 / 12, page.height * 4 / 10)
+        // Body text stays a readable 20 px or so at this size, and it reads in a fraction of the time.
+        val small = if (band !== page) PageImage.scaleDown(band, 1800) else band
+        val gray = PageImage.forOcr(small).also { if (small !== page) small.recycle() }
+        try {
+            val asIs = ocr.readability(gray)
+            if (asIs >= CLEARLY_READABLE) return page
+            val turned = PageImage.rotate(gray, 180)
+            val flipped = try { ocr.readability(turned) } finally { turned.recycle() }
+            if (flipped < asIs * 1.5f || flipped < 4f) return page
+            Log.i(LOG_TAG, "page upside down (read ${"%.1f".format(asIs)} vs ${"%.1f".format(flipped)}), turned")
+            return PageImage.rotate(page, 180).also { if (it !== page) page.recycle() }
+        } finally {
+            gray.recycle()
+        }
     }
 
     private suspend fun reportProgress(done: Int, total: Int) {
@@ -181,6 +204,9 @@ class OcrWorker(context: Context, params: WorkerParameters) : CoroutineWorker(co
         const val OUT_TITLE = "outTitle"
         const val PROGRESS_DONE = "done"
         const val PROGRESS_TOTAL = "total"
+
+        /** Words read in the middle band of a page that the right way up gives, and upside down never does. */
+        private const val CLEARLY_READABLE = 25f
 
         /** OCR resolution for photo-mode pages: enough for small print, bounded for memory. */
         const val OCR_MAX_SIDE = 3600

@@ -57,7 +57,13 @@ object PageImage {
                 bmp = Bitmap.createBitmap(bmp, l, t, nw, nh).also { if (it !== bmp) bmp.recycle() }
             }
         }
-        val (px2, size2, _) = probe(bmp)
+        var (px2, size2, _) = probe(bmp)
+        // Text running up or down the page: a quarter turn makes its lines horizontal. Which way
+        // up it reads is settled later by reading it (OcrWorker.upright).
+        if (Deskew.sideways(px2, size2.first, size2.second)) {
+            bmp = rotate(bmp, 90).also { if (it !== bmp) bmp.recycle() }
+            probe(bmp).let { px2 = it.first; size2 = it.second }
+        }
         // Corners uncovered by turning are filled with the paper's own colour: pure white beside
         // greyer paper would make the lighting clean-up shade the page next to it.
         val fill = paperColour(px2)

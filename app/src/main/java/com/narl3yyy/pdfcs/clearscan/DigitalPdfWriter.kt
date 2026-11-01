@@ -30,9 +30,9 @@ class DigitalPdfWriter : Closeable {
         val s = page.pointsPerPixel
         val pdPage = PDPage(PDRectangle(page.pageWidth, page.pageHeight))
         doc.addPage(pdPage)
-        // Content is centred: image y runs down from the top of the content box.
-        val ox = (page.pageWidth - page.widthPx * s) / 2
-        val top = page.pageHeight - (page.pageHeight - page.heightPx * s) / 2
+        // Image y runs down from the image's top edge.
+        val ox = page.originX
+        val top = page.pageHeight - page.originTop
         PDPageContentStream(doc, pdPage).use { cs ->
             for (g in page.graphics) {
                 // Opaque pictures: without this every image gets a needless transparency mask.

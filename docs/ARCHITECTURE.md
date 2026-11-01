@@ -44,6 +44,7 @@ With no convincing outline the whole photo is used. A page taken from a PDF is c
 After the perspective warp, `Deskew` makes the page look typeset:
 
 - **Trim.** Strips along the edges that are made of the scene's own colours (sampled outside the outline) are cut off. It stops at the first line carrying ink.
+- **Quarter turn.** Text running up or down the page (a portrait page photographed with the phone sideways) is recognised from the ink profiles: across text lines the ink comes and goes line by line, so that profile is far jumpier than the one along the lines. Such a page is turned 90° before the tilt is measured. Which way up it reads is settled after OCR starts (below).
 - **Tilt.** The angle at which the text rows' projection profile is sharpest (±8°, to 0.05°) is turned level.
 - **Lean.** If the line starts still drift sideways, because a corner was found a little off, the slant at which the column profile has the sharpest steps (±8%) is sheared upright.
 
@@ -52,21 +53,22 @@ After the perspective warp, `Deskew` makes the page look typeset:
 ## The digital-text pipeline (`clearscan`)
 
 1. **Camera page.** The page is found, warped flat, trimmed, levelled and stood upright (see above), cleaned (`CameraClean`), and enlarged if the print is small.
-2. **OCR.** Tesseract reads the page into hOCR: lines, baselines, words, boxes and confidences.
-3. **Typeface.** The bundled Liberation family (Serif or Sans, metric-compatible with Times and Arial) that best covers the page's ink is chosen.
-4. **Fitting.** Each word's font size comes from the font's real glyph extents. It sits on the hOCR baseline and is stretched to the word's width.
-5. **Weight and slant.**
+2. **Upright check.** A band across the middle of the page is read as it is and, unless it reads clearly, upside down too. The page is turned 180° when upside down reads clearly better. This catches upside-down photos and quarter turns the wrong way.
+3. **OCR.** Tesseract reads the page into hOCR: lines, baselines, words, boxes and confidences.
+4. **Typeface.** The bundled Liberation family (Serif or Sans, metric-compatible with Times and Arial) that best covers the page's ink is chosen.
+5. **Fitting.** Each word's font size comes from the font's real glyph extents. It sits on the hOCR baseline and is stretched to the word's width.
+6. **Weight and slant.**
    - Bold is measured as total ink darkness against the document's body text. Blur spreads ink but keeps its total.
    - Italic is measured by whether shearing the line upright sharpens its column profile.
-6. **The shape check.**
+7. **The shape check.**
    - The word is rendered and compared with the photo's ink, allowing one pixel of tolerance.
    - A word whose width doesn't fit its line's letter spacing is rejected, which catches lost decimal points and merged letters.
    - Doubtful words get a second, enlarged reading plus typographic look-alikes. Only a candidate that matches is printed.
-   - Anything else keeps its original pixels, with invisible searchable text on top.
-7. **Alignment.** Pieces of one printed line that the OCR split are joined again and set on one baseline at one size, sizes close to the body text become the body size, and line starts and ends are moved onto the column's margins, so lines don't step up and down or drift.
-8. **Graphics.** The ink left after erasing typeset words is grouped into figures, photos, rules and logos, and cut out of the cleaned page. Dark panels are read inverted so their text is searchable. Wordless ink at the page's edge or in the outer margin, and one-character "words" read from it, are leftover background and are dropped.
-9. **Page size.** The page is snapped to a standard paper or book size of the same shape, and all pages of a document share it.
-10. **Writing.** Pictures are written first, then every word as text in an embedded font subset, in its colour.
+   - Anything else keeps its original pixels, with invisible searchable text on top. Kept pixels are cleaned to black ink on white paper.
+8. **Alignment.** Pieces of one printed line that the OCR split are joined again and set on one baseline at one size, sizes close to the body text become the body size, and line starts and ends are moved onto the column's margins, so lines don't step up and down or drift. A line holding words kept as pixels is not moved sideways, so typeset words can't run into them.
+9. **Graphics.** The ink left after erasing typeset words is grouped into figures, photos, rules and logos, and cut out of the cleaned page. Dark panels are read inverted so their text is searchable. Wordless ink at the page's edge or in the outer margin, and one-character "words" read from it, are leftover background and are dropped.
+10. **Layout.** Body text is set at 10 pt. The document gets one standard paper size, the one with the page's shape nearest in width, settled on its first page with body text. Every page's content is placed in one frame centred on the paper, so all pages have the same margins whatever the photo's crop. Content too large for the paper is scaled down to fit.
+11. **Writing.** Pictures are written first, then every word as text in an embedded font subset, in its colour.
 
 ## Automatic OCR on import (`work/ImportJobs`)
 

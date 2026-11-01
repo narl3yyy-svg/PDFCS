@@ -21,15 +21,18 @@ class Graphic(val rect: Rect, val bitmap: Bitmap, val photographic: Boolean)
 
 /**
  * The result of analysing one page photo: everything needed to write it as a born-digital PDF
- * page. [pointsPerPixel] sets the physical page size.
+ * page. The photo's pixels are laid on the page at [pointsPerPixel], with its top-left corner at
+ * ([originX], [originTop]) points from the page's top-left corner.
  */
 class RebuiltPage(
     val widthPx: Int,
     val heightPx: Int,
     val pointsPerPixel: Float,
-    /** The page size in points; the content (widthPx × heightPx at pointsPerPixel) is centred in it. */
+    /** The page size in points. */
     val pageWidth: Float,
     val pageHeight: Float,
+    val originX: Float,
+    val originTop: Float,
     val words: List<PageWord>,
     val graphics: List<Graphic>,
     val stats: Stats,

@@ -2,6 +2,18 @@
 
 All notable changes to PDFCS. Versions follow [semantic versioning](https://semver.org/).
 
+## [1.3.0] — 2026-11-01
+
+Learned from a real 93-page scan of IPC J-STD-001J, in which more than half the pages came out sideways and unsearchable.
+
+### Added
+- **Sideways and upside-down pages are turned upright.** A page photographed with the phone held sideways (text running up or down the page) is detected from its ink pattern and given a quarter turn, then the page is read both ways up and turned if upside down reads clearly better. Before, such pages kept their sideways text, the OCR read nothing, and the page was kept as a blurry picture.
+
+### Changed
+- **Real-document layout.** Every rebuilt page is laid out on one standard paper size for the whole document, with body text at one size and the content in the same frame with the same margins on every page. Before, each page was as big as its photo's crop, so margins ranged from nothing to an inch, and headers and page numbers sat on the very edge.
+- **Words kept as pixels look like print.** Words and line art that are kept as the original pixels (because they could not be verified) are cleaned to black ink on white paper, instead of camera-grey on grey boxes.
+- Lines that mix typeset words with words kept as pixels are no longer shifted sideways, so the two can no longer run into each other.
+
 ## [1.2.0] — 2026-10-26
 
 ### Added

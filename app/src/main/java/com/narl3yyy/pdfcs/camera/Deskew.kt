@@ -94,6 +94,64 @@ object Deskew {
         return if (bestS < flat * 1.08) 0.0 else best
     }
 
+    /**
+     * True when the text runs up or down the image (a portrait page photographed with the phone
+     * held sideways, or a table printed across the page). Across text lines the ink comes and goes
+     * line by line, so the ink profile along that direction jumps much more from one pixel to the
+     * next than the profile along the lines does. Says nothing about which way up the text is.
+     */
+    fun sideways(argb: IntArray, w: Int, h: Int): Boolean {
+        if (w < 64 || h < 64 || argb.size != w * h) return false
+        val step = max(1, max(w, h) / 1000)
+        val sw = w / step
+        val sh = h / step
+        val hist = IntArray(256)
+        val lum = IntArray(sw * sh)
+        for (y in 0 until sh) for (x in 0 until sw) {
+            val p = argb[(y * step) * w + x * step]
+            val l = (((p shr 16) and 0xFF) * 299 + ((p shr 8) and 0xFF) * 587 + (p and 0xFF) * 114) / 1000
+            lum[y * sw + x] = l
+            hist[l]++
+        }
+        val t = com.narl3yyy.pdfcs.core.Histogram.otsu(hist)
+        val rows = IntArray(sh)
+        val cols = IntArray(sw)
+        var count = 0
+        val mx = sw * 3 / 100
+        val my = sh * 3 / 100
+        for (y in my until sh - my) for (x in mx until sw - mx) {
+            if (lum[y * sw + x] > t) continue
+            rows[y]++; cols[x]++; count++
+        }
+        if (count < sw * sh * 0.005 || count > sw * sh * 0.45) return false
+        // Mean step between neighbours relative to the mean, over the inked extent (2%–98% of the ink).
+        fun jumpiness(p: IntArray): Double {
+            val total = p.sum().toDouble()
+            var acc = 0.0
+            var lo = -1
+            var hi = p.lastIndex
+            for (i in p.indices) {
+                acc += p[i]
+                if (lo < 0 && acc >= total * 0.02) lo = i
+                if (acc >= total * 0.98) { hi = i; break }
+            }
+            if (lo < 0 || hi - lo < 16) return 0.0
+            var sum = 0.0
+            var diff = 0.0
+            for (i in lo..hi) {
+                sum += p[i]
+                if (i > lo) diff += abs(p[i] - p[i - 1])
+            }
+            return if (sum == 0.0) 0.0 else (diff / (hi - lo)) / (sum / (hi - lo + 1))
+        }
+        val across = jumpiness(rows)
+        val along = jumpiness(cols)
+        // On the 93 pages of a photographed standard, the ratio was at most 0.7 for upright text and at least 1.9 sideways.
+        return across > 0 && along > across * SIDEWAYS_RATIO
+    }
+
+    const val SIDEWAYS_RATIO = 1.35
+
     const val MAX_SHEAR = 0.08
 
     /**

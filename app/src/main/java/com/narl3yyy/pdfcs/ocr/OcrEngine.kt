@@ -45,6 +45,16 @@ class OcrEngine(context: Context, languages: List<String>) : Closeable {
         }
     }
 
+    /**
+     * How much of [gray] reads as real words: the summed confidence of confidently read words of
+     * three or more letters. Text read upside down gives next to none.
+     */
+    fun readability(gray: Bitmap): Float = readPage(gray).sumOf { line ->
+        line.words.sumOf { w ->
+            if (w.confidence >= 60 && w.text.count(Char::isLetter) >= 3) w.confidence / 100.0 else 0.0
+        }
+    }.toFloat()
+
     /** Reads one word on its own: cropped with a white margin and enlarged to a comfortable size. */
     fun readWord(gray: Bitmap, box: Rect): String? = runCatching {
         val crop = cropScaled(gray, box, margin = 0.35f, targetHeight = 64f, invert = false) ?: return null

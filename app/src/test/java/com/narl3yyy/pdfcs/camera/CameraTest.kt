@@ -168,6 +168,19 @@ class DeskewTest {
         }
     }
 
+    /** [px] (w × h) turned a quarter clockwise: h × w. */
+    private fun quarterTurn(px: IntArray, w: Int, h: Int) = IntArray(w * h) { i -> val x = i % h; val y = i / h; px[(h - 1 - x) * w + y] }
+
+    @Test fun recognisesTextRunningUpThePage() {
+        val upright = leaningPage(900, 1200, 0.0)
+        assertTrue("upright text is not sideways", !Deskew.sideways(upright, 900, 1200))
+        assertTrue("a page photographed sideways is", Deskew.sideways(quarterTurn(upright, 900, 1200), 1200, 900))
+        val tilted = page(900, 1200, 4.0)
+        assertTrue("a tilted upright page is not sideways", !Deskew.sideways(tilted, 900, 1200))
+        assertTrue("a tilted sideways page is", Deskew.sideways(quarterTurn(tilted, 900, 1200), 1200, 900))
+        assertTrue("a blank page is not", !Deskew.sideways(IntArray(400 * 400) { -1 }, 400, 400))
+    }
+
     @Test fun leavesPicturesAndBlankPagesAlone() {
         assertTrue(Deskew.angle(IntArray(400 * 400) { -1 }, 400, 400) == 0.0)
     }

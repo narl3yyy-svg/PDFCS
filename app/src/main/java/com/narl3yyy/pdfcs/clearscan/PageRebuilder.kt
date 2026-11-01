@@ -102,44 +102,78 @@ class PageRebuilder(context: Context, private val ocr: OcrEngine, private val fo
         val visibleBoxes = decided.filter { it.visible }.map { it.p.box }
         val graphics = regions.mapNotNull { r -> cut(colour, r, visibleBoxes) }
 
-        // Physical size: body text comes out at about 10 pt, the page between 7 and 14 inches.
-        val ppp = pageScale(ink.w, ink.h, bodySize)
         val stats = RebuiltPage.Stats(decided.count { it.visible }, decided.count { !it.visible }, verified, family)
         Log.i(TAG, "page: ${stats.textWords} text words, ${stats.imageWords} kept as image, $verified verified, " +
             "${graphics.size} graphics, family=$family, body=${"%.1f".format(bodySize)}px")
-        val (pw, ph) = documentSize?.takeIf { (dw, dh) -> ink.w * ppp <= dw + 0.5f && ink.h * ppp <= dh + 0.5f }
-            ?: (ink.w * ppp to ink.h * ppp)
-        return RebuiltPage(ink.w, ink.h, ppp, pw, ph, words, graphics, stats)
+        val content = Rect(0, 0, 0, 0)
+        for (d in decided) content.union(d.p.box)
+        for (g in graphics) content.union(g.rect)
+        val bodyLines = lineSizes.count { (size, n) -> n >= 3 && abs(size / bodySize - 1f) < 0.15f }
+        val l = layout(if (content.isEmpty) Rect(0, 0, ink.w, ink.h) else content, ink.w, ink.h, bodySize, bodyLines)
+        return RebuiltPage(ink.w, ink.h, l.scale, l.width, l.height, l.originX, l.originTop, words, graphics, stats)
     }
 
     // ------------------------------------------------------------------------------------------
 
-    /** The first page's size in points, which later pages of the same shape share. */
+    private class Layout(val scale: Float, val width: Float, val height: Float, val originX: Float, val originTop: Float)
+
+    /** The document's paper size in points, chosen on its first page. */
     private var documentSize: Pair<Float, Float>? = null
 
+    /** Points per pixel of the last page with enough body text to measure. */
+    private var lastScale: Float? = null
+
+    /** The largest text area so far, in points: every page's content sits in the same frame. */
+    private var frameW = 0f
+    private var frameH = 0f
+
     /**
-     * Points per pixel. Body text sets a first guess (about 10 pt); the page is then snapped to a
-     * standard paper or book size of the same shape, and later pages of the same shape get the
-     * first page's size, so a scanned book has uniform pages.
+     * Lays the page's content out the way a typeset document is: every page the same paper size,
+     * body text at the same size, and the content in one frame with the same margins on every
+     * page, whatever the crop of each photo left around it (a tight crop, the edge of the desk).
+     *
+     * - Scale: body text comes out at [BODY_POINTS]. A page with little body text (a figure page,
+     *   a title) uses the last measured scale; photos of one book are taken from about as far.
+     * - Paper: the photo's own outline at that scale, snapped to the nearest standard size that
+     *   holds the content with margins. Kept for the whole document (turned for a landscape page).
+     * - Position: the content frame is centred on the paper; a page's content starts at the
+     *   frame's top-left corner. Content larger than the paper allows is scaled down to fit.
      */
-    private fun pageScale(w: Int, h: Int, bodySize: Float): Float {
-        val longPx = max(w, h).toFloat()
-        val guess = (10f / bodySize).coerceIn(7f * 72f / longPx, 14f * 72f / longPx)
-        val aspect = h.toFloat() / w
-        documentSize?.let { (dw, dh) ->
-            // Same shape as the first page: same size; the content is fitted inside it.
-            if (kotlin.math.abs(dh / dw - aspect) / aspect < 0.06f) return minOf(dw / w, dh / h)
+    private fun layout(content: Rect, w: Int, h: Int, bodySize: Float, bodyLines: Int): Layout {
+        val measured = (BODY_POINTS / bodySize).coerceIn(7f * 72f / max(w, h), 14f * 72f / max(w, h))
+        var scale = if (bodyLines >= 4 || lastScale == null) measured else lastScale!!
+        if (bodyLines >= 4) lastScale = measured
+        // Documents are portrait; a landscape page (a wide table photographed that way) gets the
+        // same paper turned.
+        val landscape = content.width() > content.height() * 1.15f && w > h
+        // The paper is settled on the first page with body text to measure; a figure or title page
+        // before it gets a provisional size from its own outline.
+        val (pw, ph) = documentSize ?: paperFor(w * scale, h * scale).also { if (bodyLines >= 4) documentSize = it }
+        val paperW = if (landscape) ph else pw
+        val paperH = if (landscape) pw else ph
+        scale *= minOf(1f, (paperW - 2 * MIN_MARGIN) / (content.width() * scale), (paperH - 2 * MIN_MARGIN) / (content.height() * scale))
+        var fw = content.width() * scale
+        var fh = content.height() * scale
+        if (!landscape) {
+            frameW = max(frameW, fw); fw = frameW
+            frameH = max(frameH, fh); fh = frameH
         }
-        val gw = w * guess
-        val gh = h * guess
-        val portrait = h >= w
-        val snapped = STANDARD_SIZES.map { (a, b) -> if (portrait) a to b else b to a }
-            .filter { (sw, sh) -> kotlin.math.abs(sh / sw - aspect) / aspect < 0.04f }
-            .minByOrNull { (sw, _) -> kotlin.math.abs(sw - gw) }
-            ?.takeIf { (sw, _) -> kotlin.math.abs(sw - gw) / sw < 0.25f }
-        val scale = snapped?.let { it.first / w } ?: guess
-        documentSize = w * scale to h * scale
-        return scale
+        val left = (paperW - fw) / 2
+        val top = (paperH - fh) / 2
+        return Layout(scale, paperW, paperH, left - content.left * scale, top - content.top * scale)
+    }
+
+    /**
+     * The standard paper size for the photographed page ([gw] × [gh] points), always portrait:
+     * of the sizes with the page's shape, the nearest in width (the shape is measured well, the
+     * size only roughly, from the body text); the nearest overall if none has that shape. Content
+     * that does not fit it with margins is scaled down to fit (layout).
+     */
+    private fun paperFor(gw: Float, gh: Float): Pair<Float, Float> {
+        val (a, b) = if (gh >= gw) gw to gh else gh to gw
+        val aspect = b / a
+        return STANDARD_SIZES.filter { (sw, sh) -> abs(sh / sw - aspect) / aspect < 0.05f }.minByOrNull { (sw, _) -> abs(sw - a) }
+            ?: STANDARD_SIZES.minBy { (sw, sh) -> abs(kotlin.math.ln(sw / a)) + abs(kotlin.math.ln(sh / b)) }
     }
 
     private class Decision(var p: Placement, var visible: Boolean)
@@ -260,7 +294,7 @@ class PageRebuilder(context: Context, private val ocr: OcrEngine, private val fo
      *   reaching both margins (justified text) is stretched between them.
      */
     private fun alignRows(lines: List<List<Decision>>, bodySize: Float) {
-        class Row(val words: MutableList<Decision>) {
+        class Row(val words: MutableList<Decision>, var pinned: Boolean) {
             var left = 0; var right = 0; var base = 0f; var size = 0f
             fun measure() = apply {
                 left = words.minOf { it.p.box.left }
@@ -269,7 +303,10 @@ class PageRebuilder(context: Context, private val ocr: OcrEngine, private val fo
                 size = Stats.median(words.map { it.p.size })!!
             }
         }
-        val rows = lines.map { l -> l.filter { it.visible } }.filter { it.isNotEmpty() }.map { Row(it.toMutableList()).measure() }.toMutableList()
+        // A line with words kept as pixels is pinned: those pixels stay where they are, so the
+        // typeset words beside them must not move sideways into them.
+        val rows = lines.filter { l -> l.any { it.visible } }
+            .map { l -> Row(l.filter { it.visible }.toMutableList(), l.any { !it.visible }).measure() }.toMutableList()
         var merged = true
         while (merged) {
             merged = false
@@ -280,6 +317,7 @@ class PageRebuilder(context: Context, private val ocr: OcrEngine, private val fo
                 val gap = max(a.left, b.left) - min(a.right, b.right)
                 if (abs(a.base - b.base) < 0.4f * size && gap > 0 && gap < 3f * size) {
                     a.words += b.words
+                    a.pinned = a.pinned || b.pinned
                     a.measure()
                     rows.removeAt(j)
                     merged = true
@@ -321,6 +359,7 @@ class PageRebuilder(context: Context, private val ocr: OcrEngine, private val fo
         val lefts = margins(rows.map { it.left })
         val rights = margins(rows.map { it.right })
         for (row in rows) {
+            if (row.pinned) continue
             val l = row.left.toFloat()
             val r = row.right.toFloat()
             val tol = 0.6f * row.size
@@ -424,16 +463,56 @@ class PageRebuilder(context: Context, private val ocr: OcrEngine, private val fo
         val w = crop.width
         val row = IntArray(w)
         var mid = 0L
+        var coloured = 0L
+        val hist = IntArray(256)
         for (y in 0 until crop.height) {
             crop.getPixels(row, 0, w, 0, y, w, 1)
             for (x in 0 until w) {
                 val px = row[x]
                 val lo = minOf(Color.red(px), Color.green(px), Color.blue(px))
+                hist[lo]++
+                if (lo < 180 && maxOf(Color.red(px), Color.green(px), Color.blue(px)) - lo > 50) coloured++
                 if (lo > 215) row[x] = Color.WHITE else if (lo in 60..200) mid++
             }
             crop.setPixels(row, 0, w, 0, y, w, 1)
         }
-        Graphic(r, crop, photographic = mid > w.toLong() * crop.height / 4)
+        val photographic = mid > w.toLong() * crop.height / 4
+        // Words and drawings kept as pixels on paper the lighting left grey (a shadow, the curve
+        // towards the spine): the paper is made white like the rest of the page, so they don't
+        // sit in grey boxes. The paper is the brightest tenth of the region. Black print (words,
+        // rules, line art without colour) is also made black again, as dark as the typeset text
+        // next to it, instead of the camera's soft grey.
+        if (!photographic) {
+            val total = w.toLong() * crop.height
+            var acc = 0L
+            var paper = 255
+            for (v in 255 downTo 0) { acc += hist[v]; if (acc * 10 >= total) { paper = v; break } }
+            val cutoff = if (paper in 120..215) paper - 30 else 215
+            var dark = 0L
+            for (v in 0 until cutoff) dark += hist[v]
+            acc = 0L
+            var ink = 0
+            for (v in 0..255) { acc += hist[v]; if (acc * 20 >= dark) { ink = v; break } }
+            val inkOnly = dark > 0 && coloured * 10 < dark && ink < cutoff - 40
+            if (cutoff < 215 || inkOnly) {
+                val span = (cutoff - ink).coerceAtLeast(1)
+                fun level(v: Int) = ((v - ink) * 255 / span).coerceIn(0, 255)
+                for (y in 0 until crop.height) {
+                    crop.getPixels(row, 0, w, 0, y, w, 1)
+                    for (x in 0 until w) {
+                        val px = row[x]
+                        val lo = minOf(Color.red(px), Color.green(px), Color.blue(px))
+                        row[x] = when {
+                            lo > cutoff -> Color.WHITE
+                            inkOnly -> Color.rgb(level(Color.red(px)), level(Color.green(px)), level(Color.blue(px)))
+                            else -> px
+                        }
+                    }
+                    crop.setPixels(row, 0, w, 0, y, w, 1)
+                }
+            }
+        }
+        Graphic(r, crop, photographic)
     }.getOrNull()
 
     private fun expand(r: Rect, d: Int) = Rect(r.left - d, r.top - d, r.right + d, r.bottom + d)
@@ -450,6 +529,12 @@ class PageRebuilder(context: Context, private val ocr: OcrEngine, private val fo
         private const val CANDIDATE_MARGIN = 0.03f
         /** At most this many words per page get a second reading (each takes a moment). */
         private const val MAX_REREADS = 160
+
+        /** Body text size in the rebuilt document. */
+        private const val BODY_POINTS = 10f
+
+        /** The narrowest margin a rebuilt page gets, in points (a quarter inch). */
+        private const val MIN_MARGIN = 18f
 
         /** Paper and common book trim sizes in points (portrait): A4, Letter, A5, B5, Legal, 6×9", 5.5×8.5", 5×8". */
         private val STANDARD_SIZES = listOf(
