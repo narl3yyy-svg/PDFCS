@@ -70,7 +70,11 @@ object Exporters {
             val body = StringBuilder()
             var lastPage = 0
             for (p in paragraphs) {
-                if (p.page != lastPage) { body.append("<w:p><w:r><w:br w:type=\"page\"/></w:r></w:p>"); lastPage = p.page }
+                // A break between pages, not before the first one (Word would open on a blank page).
+                if (p.page != lastPage) {
+                    if (lastPage != 0) body.append("<w:p><w:r><w:br w:type=\"page\"/></w:r></w:p>")
+                    lastPage = p.page
+                }
                 body.append("<w:p>")
                 p.heading?.let { body.append("<w:pPr><w:pStyle w:val=\"Heading$it\"/></w:pPr>") }
                 for (run in p.runs) {

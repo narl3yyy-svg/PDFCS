@@ -231,7 +231,7 @@ fun ReaderScreen(
         scope.launch {
             busy = "Exporting…"
             runCatching {
-                withContext(Dispatchers.IO) { context.contentResolver.openOutputStream(uri, "w")!!.use { write(it) } }
+                withContext(Dispatchers.IO) { context.contentResolver.openOutputStream(uri, "wt")!!.use { write(it) } }
             }.onSuccess { snackbar.showSnackbar("Exported $what") }.onFailure { toast(it.message ?: "Export failed") }
             busy = null
         }

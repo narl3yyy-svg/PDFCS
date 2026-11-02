@@ -21,8 +21,8 @@ android {
         applicationId = "com.narl3yyy.pdfcs"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "1.3.0"
+        versionCode = 5
+        versionName = "1.4.0"
 
         ndk {
             // Real phones only; keeps the APK small.

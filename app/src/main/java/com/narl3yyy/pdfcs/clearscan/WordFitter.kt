@@ -16,7 +16,7 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 /** A word set in a font at a position: what the page rebuild draws, before it decides to. */
-class Placement(
+data class Placement(
     /** The text drawn, with a trailing space when another word follows on the line. */
     val text: String,
     val word: OcrWord,

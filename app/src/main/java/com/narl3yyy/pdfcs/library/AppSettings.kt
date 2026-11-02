@@ -37,6 +37,11 @@ data class Settings(
     val autoCrop: Boolean = true,
     /** Imported scans and photos become searchable PDFs by themselves (no review step). */
     val autoOcrImport: Boolean = true,
+    /** Camera scans keep their original photos in [photoFolder] (a document tree URI). */
+    val keepPhotos: Boolean = false,
+    val photoFolder: String? = null,
+    /** The camera shoots by itself once the page is held square and still. */
+    val autoShootAligned: Boolean = false,
 )
 
 class AppSettings(context: Context) {
@@ -59,6 +64,9 @@ class AppSettings(context: Context) {
             shutterSound = prefs.getBoolean("shutterSound", d.shutterSound),
             autoCrop = prefs.getBoolean("autoCrop", d.autoCrop),
             autoOcrImport = prefs.getBoolean("autoOcrImport", d.autoOcrImport),
+            keepPhotos = prefs.getBoolean("keepPhotos", d.keepPhotos),
+            photoFolder = prefs.getString("photoFolder", d.photoFolder),
+            autoShootAligned = prefs.getBoolean("autoShootAligned", d.autoShootAligned),
         )
     }
 
@@ -75,6 +83,9 @@ class AppSettings(context: Context) {
             .putBoolean("shutterSound", s.shutterSound)
             .putBoolean("autoCrop", s.autoCrop)
             .putBoolean("autoOcrImport", s.autoOcrImport)
+            .putBoolean("keepPhotos", s.keepPhotos)
+            .putString("photoFolder", s.photoFolder)
+            .putBoolean("autoShootAligned", s.autoShootAligned)
             .apply()
         _state.value = s
     }

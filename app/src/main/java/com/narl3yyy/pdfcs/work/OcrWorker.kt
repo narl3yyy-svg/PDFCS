@@ -21,6 +21,7 @@ import com.narl3yyy.pdfcs.clearscan.PhotoPdfWriter
 import com.narl3yyy.pdfcs.library.FontChoice
 import com.narl3yyy.pdfcs.library.OutputStyle
 import com.narl3yyy.pdfcs.library.PdfQuality
+import com.narl3yyy.pdfcs.library.PhotoArchive
 import com.narl3yyy.pdfcs.library.ScanPage
 import com.narl3yyy.pdfcs.library.ScanSession
 import com.narl3yyy.pdfcs.ocr.OcrEngine
@@ -65,6 +66,8 @@ class OcrWorker(context: Context, params: WorkerParameters) : CoroutineWorker(co
         try {
             check(pages.isNotEmpty()) { "There are no pages to convert" }
             runCatching { setForeground(foreground(0, pages.size)) }
+            // The photos are kept first, so they are safe whatever happens to the conversion.
+            val photosNote = if (inputData.getBoolean(KEY_KEEP_PHOTOS, false)) keepPhotos(jobDir, pages) else null
             reportProgress(0, pages.size)
             val ocr = OcrEngine(applicationContext, languages).also { engine = it }
             val produced = if (digital) digital(ocr, fontChoice, jobDir, pages, work) else photos(ocr, quality, jobDir, pages, work)
@@ -75,7 +78,7 @@ class OcrWorker(context: Context, params: WorkerParameters) : CoroutineWorker(co
             if (!produced.renameTo(target)) produced.copyTo(target, overwrite = false)
             jobDir.deleteRecursively()
             AppGraph.documents.refresh()
-            Notifications.finished(applicationContext, notificationId, title, true, "${pages.size} pages, searchable")
+            Notifications.finished(applicationContext, notificationId, title, true, "${pages.size} pages, searchable" + photosNote.orEmpty())
             Log.i(LOG_TAG, "finished: ${pages.size} pages -> ${target.name}")
             Result.success(workDataOf(KEY_OUTPUT to target.path, OUT_TITLE to title))
         } catch (e: CancellationException) {
@@ -149,7 +152,7 @@ class OcrWorker(context: Context, params: WorkerParameters) : CoroutineWorker(co
             }
             writer.end()
         }
-        return File(base.path + ".pdf")
+        return File(base.path + ".pdf").also { PhotoPdfWriter.onPaper(it) }
     }
 
     /**
@@ -175,6 +178,22 @@ class OcrWorker(context: Context, params: WorkerParameters) : CoroutineWorker(co
         }
     }
 
+    /** Copies the scan's photos to the user's photo folder; returns a note for the notification. */
+    private fun keepPhotos(jobDir: File, pages: List<ScanPage>): String {
+        val s = AppGraph.settings.value
+        val tree = s.photoFolder?.let(android.net.Uri::parse)
+        if (!s.keepPhotos || tree == null) return ""
+        if (!PhotoArchive.usable(applicationContext, tree)) return " · photos not saved: choose the photo folder again in Settings"
+        // A job restarted after the app was stopped has saved them already.
+        val done = File(jobDir, ".photos-saved")
+        if (done.exists()) return ""
+        return runCatching { PhotoArchive.save(applicationContext, tree, title, jobDir, pages).also { done.createNewFile() } }
+            .fold({ " · $it photos saved to ${PhotoArchive.label(tree)}" }, { e ->
+                Log.w(LOG_TAG, "photos not saved", e)
+                " · photos not saved: ${e.message ?: "the folder could not be written"}"
+            })
+    }
+
     private suspend fun reportProgress(done: Int, total: Int) {
         setProgress(workDataOf(PROGRESS_DONE to done, PROGRESS_TOTAL to total, KEY_TITLE to title))
         runCatching { setForeground(foreground(done, total)) }
@@ -195,6 +214,7 @@ class OcrWorker(context: Context, params: WorkerParameters) : CoroutineWorker(co
         const val KEY_FONT = "font"
         const val KEY_OUTPUT = "output"
         const val KEY_REPLACES = "replaces"
+        const val KEY_KEEP_PHOTOS = "keepPhotos"
         const val KEY_ERROR = "error"
 
         /**
@@ -227,7 +247,7 @@ class OcrWorker(context: Context, params: WorkerParameters) : CoroutineWorker(co
             if (session.pages.value.isEmpty()) return false
             val jobDir = newJobDir(context)
             if (!session.detachInto(jobDir)) return false
-            enqueueDir(context, jobDir, title, languages, quality, style, font)
+            enqueueDir(context, jobDir, title, languages, quality, style, font, keepPhotos = true)
             return true
         }
 
@@ -244,6 +264,7 @@ class OcrWorker(context: Context, params: WorkerParameters) : CoroutineWorker(co
             style: OutputStyle,
             font: FontChoice,
             replaces: File? = null,
+            keepPhotos: Boolean = false,
         ) {
             val request = OneTimeWorkRequestBuilder<OcrWorker>()
                 .addTag(TAG)
@@ -256,6 +277,7 @@ class OcrWorker(context: Context, params: WorkerParameters) : CoroutineWorker(co
                         KEY_STYLE to style.name,
                         KEY_FONT to font.name,
                         KEY_REPLACES to replaces?.path,
+                        KEY_KEEP_PHOTOS to keepPhotos,
                     ),
                 )
                 .build()

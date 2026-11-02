@@ -79,6 +79,7 @@ class DocumentSession(val file: File, private val cacheDir: File, var password: 
             file.copyTo(snapshot, overwrite = true)
             AtomicFile.write(file) { tmp -> newFile.copyTo(tmp, overwrite = true) }
             undo.addLast(Step(label, snapshot))
+            while (undo.size > MAX_UNDO) undo.removeFirst().snapshot.delete()
             redo.forEach { it.snapshot.delete() }
             redo.clear()
             changed()

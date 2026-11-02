@@ -202,3 +202,37 @@ class DisplayCopyTest {
         assertEquals(f, com.narl3yyy.pdfcs.reader.DisplayCopy.prepare(f, tmp.newFolder(), null))
     }
 }
+
+@RunWith(RobolectricTestRunner::class)
+class PhotoPaperTest {
+    @Before fun setUp() = PDFBoxResourceLoader.init(ApplicationProvider.getApplicationContext())
+
+    /** Tesseract's pages are each their photo's size; afterwards all share the document's paper, text kept. */
+    @Test fun photoPagesGoOnOnePaperSize() {
+        val f = java.io.File.createTempFile("photos", ".pdf")
+        com.tom_roush.pdfbox.pdmodel.PDDocument().use { doc ->
+            for ((w, h) in listOf(600f to 777f, 615f to 795f, 590f to 760f, 500f to 800f)) {
+                val page = com.tom_roush.pdfbox.pdmodel.PDPage(com.tom_roush.pdfbox.pdmodel.common.PDRectangle(w, h))
+                doc.addPage(page)
+                com.tom_roush.pdfbox.pdmodel.PDPageContentStream(doc, page).use { cs ->
+                    cs.beginText()
+                    cs.setFont(com.tom_roush.pdfbox.pdmodel.font.PDType1Font.HELVETICA, 12f)
+                    cs.newLineAtOffset(50f, h - 60f)
+                    cs.showText("Page text")
+                    cs.endText()
+                }
+            }
+            doc.save(f)
+        }
+        com.narl3yyy.pdfcs.clearscan.PhotoPdfWriter.onPaper(f)
+        com.tom_roush.pdfbox.pdmodel.PDDocument.load(f).use { doc ->
+            for (p in doc.pages) {
+                assertEquals(612f, p.mediaBox.width, 0.01f)
+                assertEquals(792f, p.mediaBox.height, 0.01f)
+            }
+            val text = com.tom_roush.pdfbox.text.PDFTextStripper().getText(doc)
+            assertEquals(4, Regex("Page text").findAll(text).count())
+        }
+        f.delete()
+    }
+}

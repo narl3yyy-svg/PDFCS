@@ -93,3 +93,31 @@ class PageRangesTest {
         assertEquals("", PageRanges.format(emptyList()))
     }
 }
+
+class PerspectiveAspectTest {
+    /** A w×h rectangle on a table, seen by a camera of focal length [f] tilted by [tilt] and turned by [turn] (radians). */
+    private fun photo(rw: Double, rh: Double, f: Double, tilt: Double, turn: Double, imgW: Int, imgH: Int): List<Pt> {
+        val corners = listOf(-rw / 2 to -rh / 2, rw / 2 to -rh / 2, rw / 2 to rh / 2, -rw / 2 to rh / 2)
+        return corners.map { (x0, y0) ->
+            val x = x0 * Math.cos(turn) - y0 * Math.sin(turn)
+            val y = x0 * Math.sin(turn) + y0 * Math.cos(turn)
+            // Tilt about the x axis, then a camera 2.2 units above the page.
+            val yy = y * Math.cos(tilt)
+            val z = 2.2 + y * Math.sin(tilt)
+            Pt(imgW / 2.0 + f * x / z, imgH / 2.0 + f * yy / z)
+        }
+    }
+
+    @Test fun recoversTheRealShapeOfASlantedPage() {
+        for ((tilt, turn) in listOf(0.0 to 0.0, 0.35 to 0.0, 0.5 to 0.15, -0.4 to -0.1, 0.25 to 0.3)) {
+            val q = photo(0.85, 1.1, 3000.0, tilt, turn, 3000, 4000)
+            val a = Quad.aspect(q, 3000, 4000)!!
+            assertTrue("tilt $tilt turn $turn: $a", kotlin.math.abs(a / (0.85 / 1.1) - 1) < 0.02)
+        }
+    }
+
+    @Test fun squareOnPagesNeedNoFocalLength() {
+        val q = listOf(Pt(100.0, 100.0), Pt(700.0, 100.0), Pt(700.0, 900.0), Pt(100.0, 900.0))
+        assertEquals(0.75, Quad.aspect(q, 800, 1000)!!, 1e-6)
+    }
+}

@@ -2,6 +2,41 @@
 
 All notable changes to PDFCS. Versions follow [semantic versioning](https://semver.org/).
 
+## [1.4.0] — 2026-11-02
+
+Learned from "001J STD IPC (searchable)": the 93-page IPC scan converted again with 1.3.0, whose pages still mixed typefaces, sizes and baselines, had misread capitals ("ReqUIrements", "COMPly"), and in places shrank the page into the top corner.
+
+### Added
+- **Live alignment guide** in the camera. It shows a page-shaped target with a centre cross, and the page's outline as the camera sees it: amber while you adjust, red when part of the page is outside the picture, green when it is ready. One instruction at a time tells you what to fix: fit the whole page in, move closer, centre it, hold the phone flat, line it up, hold still.
+- **Shoot automatically when lined up** (Settings): the camera takes the photo by itself once the page is centred, square and still, once per page.
+- **Save original photos** (Settings): every camera scan's photos are copied to a folder you choose, one subfolder per scan ("Page 001.jpg"…), before the conversion starts.
+- **Photo folder to searchable PDF** (Library → Add): converts a folder of page photos in page order, such as one saved above, with the latest page finder and rebuild.
+
+### Changed
+- **Pages laid out as a real document.** The layout is decided once every page has been read, for the whole document:
+  - one standard paper size, voted by the shape of the photos;
+  - a page photographed whole sits exactly as printed;
+  - a badly cropped page (cut into the text, desk left in) gets the document's body size and margins.
+  
+  Before, every page's content was placed in the largest frame seen so far, so later pages shrank into the top-left corner.
+- **True page proportions.** A page photographed at a slant is straightened to its real shape, using the camera's focal length, instead of being squashed or stretched.
+- **Printed edge bands are kept.** A page that fills the photo with a coloured band along its edge (a datasheet footer) was cropped at the band's edge, losing the band and its text. The outline now reaches the photo's edge when the strip beyond it is printing.
+- **One typeface, one size, one baseline.** One font family is used for the whole document. Each printed line has one baseline and one size, and a page uses only a few type sizes.
+- **Kept words move with their line.** Words kept as their original pixels are cut out one by one and moved and sized with their line, and always cleaned to black ink on white paper (small word crops used to be taken for photos and kept grey).
+- **Fewer kept words.** Words the OCR is very sure of are typeset even when the page's typeface differs a little from the bundled ones. Numbers still have to match the ink closely, so a date or dimension is never printed wrong.
+- **Correct capitals.** Words read in a case print never uses ("ReqUIrements", "THis") are set in lower case, Capitalised or ALL CAPS, whichever matches the ink. Real mixed-case words such as PTHs and SnPb are kept, and units and values (MHz, pF, VRM=5.25V) are left exactly as read.
+- **No stray bold words.** Bold is decided per line, and a single word is made bold only when its ink clearly says so and the bold face fits its shape better.
+- **Even line starts.** Line starts snap to the column's margins from further away, so lettered lists and paragraphs line up.
+- **"Original photos" PDFs** now also have one paper size for the whole document, instead of each page being its photo's size.
+
+### Fixed
+- Save to device and the reader's exports could leave the end of a longer old file after the new one, corrupting it, when saving over an existing file.
+- An import that failed partway left a broken copy in the library.
+- Word (.docx) exports opened on a blank page.
+- Whole-file tools (Optimize) kept undo snapshots without limit.
+- The viewer left a file open when a PDF could not be displayed.
+- The temporary copy made by "Make a PDF searchable" was left behind when it failed.
+
 ## [1.3.0] — 2026-11-01
 
 Learned from a real 93-page scan of IPC J-STD-001J, in which more than half the pages came out sideways and unsearchable.

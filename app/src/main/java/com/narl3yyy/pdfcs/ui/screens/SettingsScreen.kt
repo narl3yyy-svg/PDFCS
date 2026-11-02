@@ -1,6 +1,9 @@
 package com.narl3yyy.pdfcs.ui.screens
 
+import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -50,6 +53,7 @@ import androidx.compose.ui.unit.dp
 import com.narl3yyy.pdfcs.AppGraph
 import com.narl3yyy.pdfcs.camera.Look
 import com.narl3yyy.pdfcs.library.PdfQuality
+import com.narl3yyy.pdfcs.library.PhotoArchive
 import com.narl3yyy.pdfcs.ocr.OcrLanguages
 import com.narl3yyy.pdfcs.ui.formatBytes
 import kotlinx.coroutines.launch
@@ -62,6 +66,15 @@ fun SettingsScreen(onBack: () -> Unit, onAbout: () -> Unit) {
     val settings by AppGraph.settings.state.collectAsState()
     var installed by remember { mutableStateOf(OcrLanguages.installed(context)) }
     val downloading = remember { mutableStateMapOf<String, Float>() }
+    val pickFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { tree ->
+        if (tree == null) return@rememberLauncherForActivityResult
+        runCatching { PhotoArchive.remember(context, tree) }
+            .onSuccess {
+                settings.photoFolder?.let(Uri::parse)?.takeIf { it != tree }?.let { PhotoArchive.forget(context, it) }
+                AppGraph.settings.update { it.copy(keepPhotos = true, photoFolder = tree.toString()) }
+            }
+            .onFailure { Toast.makeText(context, "PDFCS can't save to that folder. Choose another one.", Toast.LENGTH_LONG).show() }
+    }
 
     Scaffold(
         topBar = {
@@ -95,6 +108,35 @@ fun SettingsScreen(onBack: () -> Unit, onAbout: () -> Unit) {
                     supportingContent = { Text("Crops away the table or background around the page. You can still adjust it.") },
                     trailingContent = {
                         Switch(settings.autoCrop, { v -> AppGraph.settings.update { it.copy(autoCrop = v) } })
+                    },
+                )
+            }
+            item {
+                val folder = settings.photoFolder?.let(Uri::parse)
+                ListItem(
+                    headlineContent = { Text("Save original photos") },
+                    supportingContent = {
+                        Text(
+                            if (settings.keepPhotos && folder != null) "Every scan's photos are copied to \"${PhotoArchive.label(folder)}\", " +
+                                "one folder per scan, so you can convert them again later. Tap to change the folder."
+                            else "Keep every scan's photos in a folder you choose, to convert them again later",
+                        )
+                    },
+                    trailingContent = {
+                        Switch(settings.keepPhotos && folder != null, { on ->
+                            if (on && folder == null) pickFolder.launch(null)
+                            else AppGraph.settings.update { it.copy(keepPhotos = on) }
+                        })
+                    },
+                    modifier = Modifier.clickable { pickFolder.launch(folder) },
+                )
+            }
+            item {
+                ListItem(
+                    headlineContent = { Text("Shoot automatically when lined up") },
+                    supportingContent = { Text("The camera takes the photo by itself once the page is centred, square and held still") },
+                    trailingContent = {
+                        Switch(settings.autoShootAligned, { v -> AppGraph.settings.update { it.copy(autoShootAligned = v) } })
                     },
                 )
             }

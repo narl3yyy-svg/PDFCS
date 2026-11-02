@@ -206,3 +206,34 @@ class DeskewTest {
         assertTrue("nothing known about the scene: nothing cut", Deskew.trim(px, w, h, emptyList()).all { it == 0 })
     }
 }
+
+class EdgeBandTest {
+    private val w = 400
+    private val h = 560
+
+    /** A page filling the photo, with a band from [bandTop] down drawn by [band]. */
+    private fun photo(bandTop: Int, band: (Int, Int) -> Int): IntArray = IntArray(w * h) { i ->
+        val x = i % w; val y = i / w
+        if (y >= bandTop) band(x, y) else 0xFFF8F8F8.toInt()
+    }
+
+    private val quadAboveBand = listOf(0f, 0f, 1f, 0f, 1f, 0.965f, 0f, 0.965f)
+
+    @Test fun aPrintedFooterBandIsPartOfThePage() {
+        // Flat blue band with white text marks.
+        val px = photo((h * 0.965f).toInt()) { x, y -> if (x in 40..120 && y % 6 < 2 && x % 3 == 0) 0xFFFFFFFF.toInt() else 0xFF3AA5D8.toInt() }
+        val q = PageImage.reachEdges(px, w, h, quadAboveBand)
+        assertTrue("bottom moved to the edge: $q", q[5] == 1f && q[7] == 1f)
+    }
+
+    @Test fun aDeskStripIsNot() {
+        // Wood: brown with grain (varying), no light marks.
+        val px = photo((h * 0.965f).toInt()) { x, y -> val v = 90 + ((x * 7 + y * 13) % 60); (0xFF shl 24) or (v shl 16) or ((v * 2 / 3) shl 8) or (v / 3) }
+        assertTrue(PageImage.reachEdges(px, w, h, quadAboveBand)[5] < 1f)
+    }
+
+    @Test fun aCheckedClothIsNot() {
+        val px = photo((h * 0.965f).toInt()) { x, _ -> if ((x / 20) % 2 == 0) 0xFFFFFFFF.toInt() else 0xFFC0302A.toInt() }
+        assertTrue(PageImage.reachEdges(px, w, h, quadAboveBand)[5] < 1f)
+    }
+}

@@ -71,9 +71,15 @@ class DocumentRepository(private val context: Context) {
     suspend fun import(uri: Uri): File = withContext(Dispatchers.IO) {
         val name = displayName(uri)?.removeSuffix(".pdf")?.removeSuffix(".PDF") ?: "Imported"
         val target = uniqueFile(name)
-        context.contentResolver.openInputStream(uri).use { input ->
-            requireNotNull(input) { "Cannot open the selected file" }
-            target.outputStream().use { input.copyTo(it) }
+        try {
+            context.contentResolver.openInputStream(uri).use { input ->
+                requireNotNull(input) { "Cannot open the selected file" }
+                target.outputStream().use { input.copyTo(it) }
+            }
+        } catch (t: Throwable) {
+            // A copy cut short (a cloud file that failed to download) must not stay in the library.
+            target.delete()
+            throw t
         }
         if (pageCount(target) <= 0) {
             target.delete()
@@ -84,7 +90,9 @@ class DocumentRepository(private val context: Context) {
     }
 
     suspend fun exportTo(doc: PdfDoc, uri: Uri) = withContext(Dispatchers.IO) {
-        context.contentResolver.openOutputStream(uri, "w").use { out ->
+        // "wt": plain "w" does not shorten an existing file on every provider, which would leave
+        // the end of a longer old file after the new PDF.
+        context.contentResolver.openOutputStream(uri, "wt").use { out ->
             requireNotNull(out) { "Cannot write to the selected location" }
             doc.file.inputStream().use { it.copyTo(out) }
         }

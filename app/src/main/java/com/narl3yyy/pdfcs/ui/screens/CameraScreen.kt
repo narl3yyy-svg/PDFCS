@@ -6,6 +6,8 @@ import android.media.MediaActionSound
 import android.view.HapticFeedbackConstants
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import android.util.Size
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.resolutionselector.AspectRatioStrategy
@@ -71,8 +73,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Size as GeoSize
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -84,9 +91,12 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.narl3yyy.pdfcs.AppGraph
 import com.narl3yyy.pdfcs.VolumeShutter
+import com.narl3yyy.pdfcs.camera.LiveGuide
+import com.narl3yyy.pdfcs.camera.PageAnalyzer
 import com.narl3yyy.pdfcs.ui.components.PageThumbnail
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.util.concurrent.Executors
 
 private enum class Flash(val mode: Int) {
     OFF(ImageCapture.FLASH_MODE_OFF), AUTO(ImageCapture.FLASH_MODE_AUTO), ON(ImageCapture.FLASH_MODE_ON)
@@ -143,6 +153,11 @@ private fun CameraContent(onBack: () -> Unit, onDone: () -> Unit) {
     var flash by remember { mutableStateOf(Flash.OFF) }
     var torch by remember { mutableStateOf(false) }
     var grid by remember { mutableStateOf(true) }
+    val guide = remember { LiveGuide() }
+    var advice by remember { mutableStateOf<LiveGuide.Advice?>(null) }
+    // Auto-shoot fires once per page: it is armed again when the framing breaks (a page turned).
+    var armed by remember { mutableStateOf(true) }
+    val analysis = remember { Executors.newSingleThreadExecutor() }
     var auto by remember { mutableStateOf(false) }
     var saving by remember { mutableIntStateOf(0) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -152,7 +167,14 @@ private fun CameraContent(onBack: () -> Unit, onDone: () -> Unit) {
 
     val controller = remember {
         LifecycleCameraController(context).apply {
-            setEnabledUseCases(CameraController.IMAGE_CAPTURE)
+            setEnabledUseCases(CameraController.IMAGE_CAPTURE or CameraController.IMAGE_ANALYSIS)
+            // Small frames, only the newest: the guide follows the page without lagging behind.
+            imageAnalysisBackpressureStrategy = ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST
+            imageAnalysisOutputImageFormat = ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888
+            imageAnalysisResolutionSelector = ResolutionSelector.Builder()
+                .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+                .setResolutionStrategy(ResolutionStrategy(Size(640, 480), ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER))
+                .build()
             imageCaptureMode = ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY
             val selector = ResolutionSelector.Builder()
                 .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
@@ -171,8 +193,23 @@ private fun CameraContent(onBack: () -> Unit, onDone: () -> Unit) {
         onDispose {
             VolumeShutter.active = false
             view.keepScreenOn = false
+            controller.clearImageAnalysisAnalyzer()
             controller.unbind()
+            analysis.shutdown()
             sound.release()
+        }
+    }
+    // The guide runs while it is shown.
+    LaunchedEffect(grid) {
+        guide.reset()
+        advice = null
+        if (grid) {
+            controller.setImageAnalysisAnalyzer(analysis, PageAnalyzer { corners ->
+                val a = guide.update(corners)
+                view.post { advice = a }
+            })
+        } else {
+            controller.clearImageAnalysisAnalyzer()
         }
     }
     LaunchedEffect(flash) { controller.imageCaptureFlashMode = flash.mode }
@@ -180,6 +217,10 @@ private fun CameraContent(onBack: () -> Unit, onDone: () -> Unit) {
 
     fun capture() {
         val file = session.newImageFile()
+        // What the guide saw when the shutter went: a fallback crop, and a warning for a cut-off page.
+        val seen = advice
+        val hint = seen?.corners?.takeIf { !seen.cutOff && seen.state != LiveGuide.State.SEARCHING }?.let(LiveGuide::toQuad)
+        if (seen?.cutOff == true) error = "Part of the page may be outside that photo. Retake it if so."
         saving++
         if (settings.shutterSound) sound.play(MediaActionSound.SHUTTER_CLICK)
         view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
@@ -193,7 +234,7 @@ private fun CameraContent(onBack: () -> Unit, onDone: () -> Unit) {
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
                     saving--
-                    session.addPage(file, settings.defaultLook, findEdges = settings.autoCrop)
+                    session.addPage(file, settings.defaultLook, findEdges = settings.autoCrop, hint = hint)
                 }
 
                 override fun onError(exception: ImageCaptureException) {
@@ -218,6 +259,16 @@ private fun CameraContent(onBack: () -> Unit, onDone: () -> Unit) {
         }
     }
 
+    // Shoot by itself once the page is lined up and still (Settings), once per page.
+    LaunchedEffect(advice?.state) {
+        val state = advice?.state
+        if (state == LiveGuide.State.SEARCHING || state == LiveGuide.State.ADJUST) armed = true
+        if (settings.autoShootAligned && !auto && state == LiveGuide.State.READY && armed && saving == 0) {
+            armed = false
+            capture()
+        }
+    }
+
     LaunchedEffect(error) {
         if (error != null) { delay(3000); error = null }
     }
@@ -238,13 +289,8 @@ private fun CameraContent(onBack: () -> Unit, onDone: () -> Unit) {
                 modifier = Modifier.fillMaxSize(),
             )
             if (grid) {
-                Canvas(Modifier.fillMaxSize()) {
-                    val c = Color.White.copy(alpha = 0.35f)
-                    for (i in 1..2) {
-                        drawLine(c, Offset(size.width * i / 3, 0f), Offset(size.width * i / 3, size.height), 1.5f)
-                        drawLine(c, Offset(0f, size.height * i / 3), Offset(size.width, size.height * i / 3), 1.5f)
-                    }
-                }
+                val a = advice
+                Canvas(Modifier.fillMaxSize()) { drawGuide(a) }
             }
             Box(Modifier.fillMaxSize().alpha(flashAnim.value).background(Color.White))
         }
@@ -261,7 +307,7 @@ private fun CameraContent(onBack: () -> Unit, onDone: () -> Unit) {
                 "Flash",
             ) { flash = Flash.entries[(flash.ordinal + 1) % Flash.entries.size] }
             CamIcon(if (torch) Icons.Rounded.FlashlightOn else Icons.Rounded.FlashlightOff, "Light", active = torch) { torch = !torch }
-            CamIcon(if (grid) Icons.Rounded.GridOn else Icons.Rounded.GridOff, "Grid") { grid = !grid }
+            CamIcon(if (grid) Icons.Rounded.GridOn else Icons.Rounded.GridOff, "Alignment guide", active = grid) { grid = !grid }
             CamIcon(Icons.Rounded.Timer, "Auto capture", active = auto) { auto = !auto }
         }
 
@@ -269,9 +315,15 @@ private fun CameraContent(onBack: () -> Unit, onDone: () -> Unit) {
         val hint = when {
             error != null -> error
             auto -> "Auto capture every ${settings.autoCaptureSeconds}s — turn the page between shots"
+            grid && advice != null -> advice?.message
             pages.isEmpty() -> "Fill the frame with the page, keep it flat and well lit" +
                 if (settings.volumeShutter) " · volume keys take photos" else ""
             else -> null
+        }
+        val hintColour = when {
+            error != null || advice?.cutOff == true -> Color(0xFFD32F2F)
+            grid && advice?.state == LiveGuide.State.READY -> Color(0xFF2E7D32)
+            else -> Color.Black.copy(alpha = 0.55f)
         }
         if (hint != null) {
             Text(
@@ -283,7 +335,7 @@ private fun CameraContent(onBack: () -> Unit, onDone: () -> Unit) {
                     .align(Alignment.TopCenter)
                     .statusBarsPadding()
                     .padding(top = 64.dp, start = 24.dp, end = 24.dp)
-                    .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(50))
+                    .background(hintColour, RoundedCornerShape(50))
                     .padding(horizontal = 14.dp, vertical = 8.dp),
             )
         }
@@ -349,6 +401,57 @@ private fun CameraContent(onBack: () -> Unit, onDone: () -> Unit) {
             }
         }
     }
+}
+
+private val GuideAmber = Color(0xFFFFB300)
+private val GuideGreen = Color(0xFF43A047)
+private val GuideRed = Color(0xFFE53935)
+
+/**
+ * The alignment guide: a page-shaped target with a centre cross, a level grid inside it, and the
+ * page outline the camera sees, coloured by how well it is lined up (amber: adjust, red: part of
+ * the page is cut off, green: ready). A line from the centre cross to the page's centre shows
+ * which way to move.
+ */
+private fun DrawScope.drawGuide(a: LiveGuide.Advice?) {
+    val w = size.width
+    val h = size.height
+    val faint = Color.White.copy(alpha = 0.45f)
+    // Target: a Letter/A4-shaped frame filling most of the picture.
+    val th = h * 0.86f
+    val tw = minOf(w * 0.9f, th / 1.33f)
+    val tl = Offset((w - tw) / 2, (h - th) / 2)
+    val dash = PathEffect.dashPathEffect(floatArrayOf(18f, 14f))
+    drawRoundRect(faint, tl, GeoSize(tw, th), CornerRadius(12f), style = Stroke(2.dp.toPx(), pathEffect = dash))
+    for (i in 1..3) {
+        val x = tl.x + tw * i / 4
+        val y = tl.y + th * i / 4
+        drawLine(Color.White.copy(alpha = 0.18f), Offset(x, tl.y), Offset(x, tl.y + th), 1f)
+        drawLine(Color.White.copy(alpha = 0.18f), Offset(tl.x, y), Offset(tl.x + tw, y), 1f)
+    }
+    val c = Offset(w / 2, h / 2)
+    val arm = 14.dp.toPx()
+    drawLine(faint, Offset(c.x - arm, c.y), Offset(c.x + arm, c.y), 2.dp.toPx())
+    drawLine(faint, Offset(c.x, c.y - arm), Offset(c.x, c.y + arm), 2.dp.toPx())
+
+    val corners = a?.corners ?: return
+    val colour = when {
+        a.cutOff -> GuideRed
+        a.state == LiveGuide.State.READY || a.state == LiveGuide.State.HOLD -> GuideGreen
+        else -> GuideAmber
+    }
+    val pts = corners.map { Offset(it.x.toFloat() * w, it.y.toFloat() * h) }
+    val path = Path().apply {
+        moveTo(pts[0].x, pts[0].y)
+        for (p in pts.drop(1)) lineTo(p.x, p.y)
+        close()
+    }
+    drawPath(path, colour.copy(alpha = 0.16f))
+    drawPath(path, colour, style = Stroke(3.dp.toPx()))
+    for (p in pts) drawCircle(colour, 6.dp.toPx(), p)
+    val centre = Offset(pts.map { it.x }.average().toFloat(), pts.map { it.y }.average().toFloat())
+    drawLine(colour, c, centre, 2.dp.toPx())
+    drawCircle(colour, 5.dp.toPx(), centre)
 }
 
 @Composable

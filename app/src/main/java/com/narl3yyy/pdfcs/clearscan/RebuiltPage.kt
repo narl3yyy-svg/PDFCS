@@ -2,6 +2,7 @@ package com.narl3yyy.pdfcs.clearscan
 
 import android.graphics.Bitmap
 import android.graphics.Rect
+import android.graphics.RectF
 
 /** A word on a rebuilt page. Invisible words keep the original pixels underneath them. */
 class PageWord(
@@ -16,26 +17,25 @@ class PageWord(
     val colour: Int,
 )
 
-/** A picture cut from the cleaned page: a figure, photo, rule, logo, or a word kept as pixels. */
-class Graphic(val rect: Rect, val bitmap: Bitmap, val photographic: Boolean)
+/**
+ * A picture cut from the cleaned page ([rect]): a figure, photo, rule, logo, or a word kept as
+ * pixels. It is drawn at [dest], which differs from [rect] only for a kept word moved and sized
+ * with the typeset line it belongs to.
+ */
+class Graphic(val rect: Rect, val bitmap: Bitmap, val photographic: Boolean, var dest: RectF = RectF(rect))
 
 /**
  * The result of analysing one page photo: everything needed to write it as a born-digital PDF
- * page. The photo's pixels are laid on the page at [pointsPerPixel], with its top-left corner at
- * ([originX], [originTop]) points from the page's top-left corner.
+ * page, in the photo's pixels. Where those pixels go on paper is decided for the whole document
+ * at once ([PageLayout]), from [measure].
  */
 class RebuiltPage(
     val widthPx: Int,
     val heightPx: Int,
-    val pointsPerPixel: Float,
-    /** The page size in points. */
-    val pageWidth: Float,
-    val pageHeight: Float,
-    val originX: Float,
-    val originTop: Float,
     val words: List<PageWord>,
     val graphics: List<Graphic>,
     val stats: Stats,
+    val measure: PageLayout.Measure,
 ) {
     class Stats(val textWords: Int, val imageWords: Int, val verified: Int, val family: FontFamily)
 

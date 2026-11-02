@@ -21,7 +21,8 @@ import kotlin.math.max
 /** Renders pages with the platform PDF renderer. PdfRenderer allows one open page at a time. */
 class PdfPages(file: File) : Closeable {
     private val pfd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
-    private val renderer = PdfRenderer(pfd)
+    // A PDF the platform can't open (encrypted, damaged) must not leave its file open.
+    private val renderer = try { PdfRenderer(pfd) } catch (e: Exception) { pfd.close(); throw e }
     private val lock = Mutex()
     private val cache = object : LruCache<String, Bitmap>(64 * 1024 * 1024) {
         override fun sizeOf(key: String, value: Bitmap) = value.byteCount

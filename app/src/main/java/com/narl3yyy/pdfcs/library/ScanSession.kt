@@ -74,12 +74,16 @@ class ScanSession(context: Context) {
 
     fun fileOf(page: ScanPage): File = File(dir, page.source)
 
-    /** Adds a page and returns its id. With [findEdges], the page's corners are found in the background. */
+    /**
+     * Adds a page and returns its id. With [findEdges], the page's corners are found in the
+     * background; [hint] (the outline the live camera guide saw) is used when the photo's own
+     * search finds none.
+     */
     @Synchronized
-    fun addPage(image: File, look: Look, findEdges: Boolean = false): String {
+    fun addPage(image: File, look: Look, findEdges: Boolean = false, hint: List<Float>? = null): String {
         val page = ScanPage(source = image.name, look = look)
         mutate { it + page }
-        if (findEdges) autoCrop(page.id)
+        if (findEdges) autoCrop(page.id, hint)
         return page.id
     }
 
@@ -88,10 +92,10 @@ class ScanSession(context: Context) {
     private val cropScope = CoroutineScope(SupervisorJob() + Dispatchers.Default.limitedParallelism(1))
 
     /** Finds the page's edges and straightens it, unless the user has cropped it in the meantime. */
-    private fun autoCrop(id: String) {
+    private fun autoCrop(id: String, hint: List<Float>? = null) {
         cropScope.launch {
             val page = pages.value.firstOrNull { it.id == id } ?: return@launch
-            val quad = PageImage.detectPage(fileOf(page)) ?: return@launch
+            val quad = PageImage.detectPage(fileOf(page)) ?: hint ?: return@launch
             synchronized(this@ScanSession) {
                 val now = pages.value.firstOrNull { it.id == id } ?: return@launch
                 if (now.quad == null && now.source == page.source) update(now.copy(quad = quad))

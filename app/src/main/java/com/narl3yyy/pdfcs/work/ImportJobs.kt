@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.ParcelFileDescriptor
+import android.provider.DocumentsContract
 import com.narl3yyy.pdfcs.AppGraph
 import com.narl3yyy.pdfcs.camera.Look
 import com.narl3yyy.pdfcs.camera.PageImage
@@ -106,6 +107,66 @@ object ImportJobs {
             queue(context, dir, pages, title)
             pages.size
         }
+
+    /**
+     * Converts a folder of page photos, such as one PDFCS saved with "Save original photos": the
+     * photos in name order ("Page 001", "Page 002"…), each page found again (with this version's
+     * page finder), turned and cleaned as the folder's pages.json says when it has one. Returns
+     * the page count.
+     */
+    suspend fun fromFolder(context: Context, tree: Uri, onProgress: (Int, Int) -> Unit = { _, _ -> }): Int =
+        withContext(Dispatchers.IO) {
+            val resolver = context.contentResolver
+            val treeId = DocumentsContract.getTreeDocumentId(tree)
+            val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, treeId)
+            class Entry(val id: String, val name: String, val mime: String)
+            val entries = ArrayList<Entry>()
+            resolver.query(children, arrayOf(
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                DocumentsContract.Document.COLUMN_MIME_TYPE,
+            ), null, null, null)?.use { c -> while (c.moveToNext()) entries += Entry(c.getString(0), c.getString(1) ?: "", c.getString(2) ?: "") }
+            val saved = entries.firstOrNull { it.name == "pages.json" }?.let { e ->
+                runCatching {
+                    val text = resolver.openInputStream(DocumentsContract.buildDocumentUriUsingTree(tree, e.id))!!.use { it.readBytes().decodeToString() }
+                    val arr = org.json.JSONArray(text)
+                    List(arr.length()) { ScanPage.fromJson(arr.getJSONObject(it)) }.associateBy { it.source }
+                }.getOrNull()
+            }.orEmpty()
+            val photos = entries.filter { it.mime.startsWith("image/") }.sortedWith { a, b -> naturalCompare(a.name, b.name) }
+            check(photos.isNotEmpty()) { "That folder has no photos" }
+            val dir = OcrWorker.newJobDir(context).apply { mkdirs() }
+            val pages = ArrayList<ScanPage>()
+            val look = AppGraph.settings.value.defaultLook
+            photos.forEachIndexed { i, e ->
+                currentCoroutineContext().ensureActive()
+                runCatching {
+                    val f = File(dir, "img_${i + 1}_${UUID.randomUUID().toString().take(6)}.jpg")
+                    resolver.openInputStream(DocumentsContract.buildDocumentUriUsingTree(tree, e.id))!!.use { input ->
+                        f.outputStream().use { input.copyTo(it) }
+                    }
+                    val before = saved[e.name]
+                    pages += ScanPage(source = f.name, look = before?.look ?: look, rotation = before?.rotation ?: 0, quad = PageImage.detectPage(f))
+                }
+                onProgress(i + 1, photos.size)
+            }
+            val title = treeId.substringAfterLast('/').substringAfter(':').ifBlank { "Photos" }
+            queue(context, dir, pages, title)
+            pages.size
+        }
+
+    /** Orders "Page 2" before "Page 10". */
+    private fun naturalCompare(a: String, b: String): Int {
+        val split = Regex("""(\d+)|(\D+)""")
+        val pa = split.findAll(a.lowercase()).map { it.value }.toList()
+        val pb = split.findAll(b.lowercase()).map { it.value }.toList()
+        for (i in 0 until minOf(pa.size, pb.size)) {
+            val x = pa[i]; val y = pb[i]
+            val c = if (x[0].isDigit() && y[0].isDigit()) x.trimStart('0').length.compareTo(y.trimStart('0').length).takeIf { it != 0 } ?: x.trimStart('0').compareTo(y.trimStart('0'))
+            else x.compareTo(y)
+            if (c != 0) return c
+        }
+        return pa.size.compareTo(pb.size)
+    }
 
     private fun queue(context: Context, dir: File, pages: List<ScanPage>, title: String, replaces: File? = null) {
         check(pages.isNotEmpty()) { "Nothing could be read from that file" }

@@ -43,6 +43,7 @@ import androidx.compose.material.icons.rounded.DocumentScanner
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.DriveFileRenameOutline
 import androidx.compose.material.icons.rounded.FileOpen
+import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.FindInPage
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.MoreVert
@@ -237,16 +238,19 @@ fun LibraryScreen(
             busy = "Reading PDF…"
             val result = runCatching {
                 val tmp = File(context.cacheDir, "ocr_import.pdf")
-                withContext(Dispatchers.IO) {
-                    context.contentResolver.openInputStream(uri)!!.use { i -> tmp.outputStream().use { i.copyTo(it) } }
+                try {
+                    withContext(Dispatchers.IO) {
+                        context.contentResolver.openInputStream(uri)!!.use { i -> tmp.outputStream().use { i.copyTo(it) } }
+                    }
+                    if (AppGraph.settings.value.autoOcrImport) {
+                        val title = (repo.nameOf(uri) ?: "Imported") + " (searchable)"
+                        ImportJobs.fromPdf(context, tmp, title) { d, t -> busy = "Preparing page $d of $t…" }
+                    } else {
+                        PdfPages.importIntoSession(tmp, AppGraph.session) { d, t -> busy = "Preparing page $d of $t…" }
+                    }
+                } finally {
+                    tmp.delete()
                 }
-                if (AppGraph.settings.value.autoOcrImport) {
-                    val title = (repo.nameOf(uri) ?: "Imported") + " (searchable)"
-                    ImportJobs.fromPdf(context, tmp, title) { d, t -> busy = "Preparing page $d of $t…" }
-                } else {
-                    PdfPages.importIntoSession(tmp, AppGraph.session) { d, t -> busy = "Preparing page $d of $t…" }
-                }
-                tmp.delete()
             }
             busy = null
             result.onSuccess { if (!AppGraph.settings.value.autoOcrImport) onReview() else toast("Making the PDF searchable…") }
@@ -269,6 +273,17 @@ fun LibraryScreen(
                 busy = null
                 onReview()
             }
+        }
+    }
+    // A folder of page photos (one PDFCS saved, or any other): converted in name order.
+    val pickFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { tree ->
+        if (tree == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            busy = "Reading the folder…"
+            runCatching { ImportJobs.fromFolder(context, tree) { d, t -> busy = "Finding page $d of $t…" } }
+                .onSuccess { toast("Making $it pages searchable…") }
+                .onFailure { toast(it.message ?: "Could not read that folder") }
+            busy = null
         }
     }
     val saveToDevice = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
@@ -342,6 +357,11 @@ fun LibraryScreen(
                                         addMenu = false
                                         pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                                     },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Photo folder to searchable PDF") },
+                                    leadingIcon = { Icon(Icons.Rounded.FolderOpen, null) },
+                                    onClick = { addMenu = false; pickFolder.launch(null) },
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Make a PDF searchable (OCR)") },

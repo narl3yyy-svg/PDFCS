@@ -21,6 +21,36 @@ import kotlin.math.hypot
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class SceneBenchmark {
+    /** The live guide's search: every scene as a 480-pixel preview frame, timed. */
+    @Test fun liveFrames() {
+        val dir = System.getProperty("pdfcs.scenes")?.let(::File)
+        assumeTrue("set -Dpdfcs.scenes to run the benchmark", dir?.isDirectory == true)
+        var ok = 0; var n = 0; var found = 0; var total = 0L; var worst = 0L
+        for (photo in dir!!.listFiles { f -> f.name.startsWith("scene_") && f.name.endsWith(".jpg") }!!.sorted()) {
+            val truth = JSONObject(File(photo.path.removeSuffix(".jpg") + ".json").readText())
+            val w = truth.getDouble("width"); val h = truth.getDouble("height")
+            val c = truth.getJSONArray("corners")
+            val gt = List(4) { c.getJSONArray(it).let { p -> p.getDouble(0) / w to p.getDouble(1) / h } }
+            val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = 4 }
+            val bmp = android.graphics.BitmapFactory.decodeFile(photo.path, opts)
+            val s = com.narl3yyy.pdfcs.camera.PageAnalyzer.SIDE.toFloat() / maxOf(bmp.width, bmp.height)
+            val small = android.graphics.Bitmap.createScaledBitmap(bmp, (bmp.width * s).toInt(), (bmp.height * s).toInt(), true)
+            val px = IntArray(small.width * small.height).also { small.getPixels(it, 0, small.width, 0, 0, small.width, small.height) }
+            val t0 = System.nanoTime()
+            val f = com.narl3yyy.pdfcs.camera.PageFinder.find(px, small.width, small.height)
+            val ms = (System.nanoTime() - t0) / 1_000_000
+            if (n > 0) { total += ms; worst = maxOf(worst, ms) }
+            n++
+            if (f == null) continue
+            found++
+            val diag = hypot((gt[2].first - gt[0].first) * w, (gt[2].second - gt[0].second) * h)
+            val visible = (0 until 4).filter { i -> gt[i].first in 0.0..1.0 && gt[i].second in 0.0..1.0 }
+            val err = visible.maxOfOrNull { i -> hypot((f.corners[i].x / small.width - gt[i].first) * w, (f.corners[i].y / small.height - gt[i].second) * h) / diag * 100 } ?: 0.0
+            if (err < 3.0) ok++
+        }
+        println("live frames: $found/$n found, $ok within 3% of the diagonal, ${total / maxOf(1, n - 1)} ms average, $worst ms worst")
+    }
+
     @Test fun findPages() {
         val dir = System.getProperty("pdfcs.scenes")?.let(::File)
         assumeTrue("set -Dpdfcs.scenes to run the benchmark", dir?.isDirectory == true)

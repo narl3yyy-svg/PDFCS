@@ -8,6 +8,7 @@ import android.graphics.Paint
 import androidx.exifinterface.media.ExifInterface
 import com.narl3yyy.pdfcs.library.ScanPage
 import java.io.File
+import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
@@ -241,8 +242,19 @@ object PageImage {
         val bottom = hypot(p[4] - p[6], p[5] - p[7])
         val left = hypot(p[6] - p[0], p[7] - p[1])
         val right = hypot(p[4] - p[2], p[5] - p[3])
-        val outW = ((top + bottom) / 2).roundToInt().coerceAtLeast(16)
-        val outH = ((left + right) / 2).roundToInt().coerceAtLeast(16)
+        // The page's real proportions, perspective undone; the size is the photo's sharpest side.
+        val corners = List(4) { com.narl3yyy.pdfcs.core.Pt(p[it * 2].toDouble(), p[it * 2 + 1].toDouble()) }
+        val aspect = com.narl3yyy.pdfcs.core.Quad.aspect(corners, src.width, src.height)?.toFloat()
+        val avgW = (top + bottom) / 2
+        val avgH = (left + right) / 2
+        val (fw, fh) = when {
+            aspect == null -> avgW to avgH
+            // Keep the larger of the measured sizes, so no detail is thrown away.
+            avgW / avgH >= aspect -> avgW to avgW / aspect
+            else -> avgH * aspect to avgH
+        }
+        val outW = fw.roundToInt().coerceAtLeast(16)
+        val outH = fh.roundToInt().coerceAtLeast(16)
         val dst = floatArrayOf(0f, 0f, outW.toFloat(), 0f, outW.toFloat(), outH.toFloat(), 0f, outH.toFloat())
         val m = Matrix()
         if (!m.setPolyToPoly(p, 0, dst, 0, 4)) return src.copy(Bitmap.Config.ARGB_8888, true)
@@ -266,11 +278,55 @@ object PageImage {
             val px = IntArray(w * h)
             bmp.getPixels(px, 0, w, 0, 0, w, h)
             val found = PageFinder.find(px, w, h) ?: return@runCatching null
-            found.corners.flatMap { listOf((it.x / w).toFloat().coerceIn(0f, 1f), (it.y / h).toFloat().coerceIn(0f, 1f)) }
+            reachEdges(px, w, h, found.corners.flatMap { listOf((it.x / w).toFloat().coerceIn(0f, 1f), (it.y / h).toFloat().coerceIn(0f, 1f)) })
         } finally {
             bmp.recycle()
         }
     }.getOrNull()
+
+    /**
+     * A page photographed so it fills the picture: a printed band along its edge (a datasheet's
+     * coloured footer) has a strong edge of its own, and the outline can stop at it, cutting the
+     * band and its text off. A side that stops just short of the photo's edge ([EDGE_GAP] or less)
+     * is moved out to it when the strip beyond holds paper-coloured marks on a darker field:
+     * printing (light text on a band), which no desk or cloth shows.
+     */
+    internal fun reachEdges(px: IntArray, w: Int, h: Int, quad: List<Float>): List<Float> {
+        val q = quad.toMutableList()
+        // Paper: the median of the brighter half of the page's middle.
+        val lums = ArrayList<Int>()
+        for (y in h / 3 until 2 * h / 3 step max(1, h / 40)) for (x in w / 3 until 2 * w / 3 step max(1, w / 40)) lums += lum(px[y * w + x])
+        lums.sort()
+        val paper = lums.drop(lums.size / 2).let { it.getOrNull(it.size / 2) } ?: return quad
+        fun printedStrip(x0: Int, y0: Int, x1: Int, y1: Int): Boolean {
+            var n = 0; var light = 0
+            val field = ArrayList<Int>()
+            for (y in y0 until y1) for (x in x0 until x1 step max(1, (x1 - x0) / 300)) {
+                val v = lum(px[y * w + x]); n++
+                if (v > paper - 25) light++ else if (v < paper - 60) field += v
+            }
+            if (n == 0 || field.size < n / 2) return false
+            // One flat ink colour (a printed band; wood grain and cloth patterns vary), with a few
+            // light marks on it (its text), not the large light squares of a checked cloth.
+            field.sort()
+            val spread = field[field.size * 3 / 4] - field[field.size / 4]
+            return spread < 30 && light > n * 0.002 && light < n * 0.3
+        }
+        // Each side: its two corner indices (x, y pairs) and the photo edge it may move to.
+        val top = minOf(q[1], q[3]); val bottom = maxOf(q[5], q[7])
+        val left = minOf(q[0], q[6]); val right = maxOf(q[2], q[4])
+        // Only a side running along the photo's edge (a page shot square on, filling the picture).
+        fun level(a: Float, b: Float) = abs(a - b) < 0.01f
+        if (level(q[5], q[7]) && bottom < 1f && 1f - bottom <= EDGE_GAP && printedStrip((left * w).toInt(), (bottom * h).toInt().coerceAtMost(h - 1), (right * w).toInt().coerceAtMost(w), h)) { q[5] = 1f; q[7] = 1f }
+        if (level(q[1], q[3]) && top > 0f && top <= EDGE_GAP && printedStrip((left * w).toInt(), 0, (right * w).toInt().coerceAtMost(w), (top * h).toInt().coerceAtLeast(1))) { q[1] = 0f; q[3] = 0f }
+        if (level(q[0], q[6]) && left > 0f && left <= EDGE_GAP && printedStrip(0, (top * h).toInt(), (left * w).toInt().coerceAtLeast(1), (bottom * h).toInt().coerceAtMost(h))) { q[0] = 0f; q[6] = 0f }
+        if (level(q[2], q[4]) && right < 1f && 1f - right <= EDGE_GAP && printedStrip((right * w).toInt().coerceAtMost(w - 1), (top * h).toInt(), w, (bottom * h).toInt().coerceAtMost(h))) { q[2] = 1f; q[4] = 1f }
+        return q
+    }
+
+    private const val EDGE_GAP = 0.06f
+
+    private fun lum(p: Int) = (((p shr 16) and 0xFF) * 299 + ((p shr 8) and 0xFF) * 587 + (p and 0xFF) * 114) / 1000
 
     /** Splits the crop of a two-page spread into its left and right halves. */
     fun splitQuad(quad: List<Float>?): Pair<List<Float>, List<Float>> {
